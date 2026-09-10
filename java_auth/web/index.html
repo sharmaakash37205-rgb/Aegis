@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aegis Vault — Military-Grade File Encryption & Security Suite</title>
+  <meta name="description" content="State-of-the-Art Zero-Knowledge AES-256-GCM Streaming Encryption & Security Suite powered by Java 25 & Web Crypto.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+</head>
+<body>
+  <!-- Ambient background glow effects -->
+  <div class="glow-orb glow-orb-1"></div>
+  <div class="glow-orb glow-orb-2"></div>
+  <div class="glow-orb glow-orb-3"></div>
+
+  <div class="app-container">
+
+    <!-- ================================================================
+         AUTHENTICATION GATEWAY (LOCK SCREEN) - VISIBLE ONLY WHEN LOGGED OUT
+         ================================================================ -->
+    <div id="auth-gateway-screen" class="auth-gateway-screen">
+      <div class="auth-gateway-header">
+        <div class="logo-area">
+          <div class="logo-shield-badge">
+            <span class="logo-shield">🛡️</span>
+          </div>
+          <div>
+            <h1 class="logo-title">AEGIS VAULT</h1>
+            <p class="logo-subtitle">MILITARY-GRADE AES-256-GCM STREAMING • PBKDF2 600K</p>
+          </div>
+        </div>
+        <div class="auth-gateway-status-bar">
+          <div class="status-indicator">
+            <span class="status-pulse" id="gateway-status-pulse"></span>
+            <span id="gateway-status-text">Connected to Node</span>
+          </div>
+          <button type="button" id="btn-gateway-sfx" class="header-action-btn header-action-btn--active" onclick="toggleSFX()">
+            <span id="gateway-sfx-icon">🔊</span> <span id="gateway-sfx-text">SFX On</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Auth Forms Card -->
+      <div id="auth-forms-container" class="card glass-card auth-card-container">
+        <div class="auth-header-hero">
+          <div class="auth-hero-icon-glow">
+            <span>🛡️</span>
+          </div>
+          <h2 class="auth-hero-title">Aegis Vault Security Portal</h2>
+          <p class="auth-hero-subtitle">Military-Grade Zero-Knowledge Cryptographic Access</p>
+        </div>
+
+        <div class="tabs-nav">
+          <button id="tab-login" class="tab-btn active" onclick="switchAuthTab('login')">
+            <span class="tab-icon">🔑</span> Login
+          </button>
+          <button id="tab-register" class="tab-btn" onclick="switchAuthTab('register')">
+            <span class="tab-icon">✨</span> Create Account
+          </button>
+        </div>
+
+        <!-- Form 1: Login Form -->
+        <form id="login-form" class="auth-form" onsubmit="handleLogin(event)">
+          <div class="form-group">
+            <label for="login-username">Username or Email</label>
+            <div class="input-wrapper">
+              <span class="input-icon">👤</span>
+              <input type="text" id="login-username" placeholder="Enter your username" required autocomplete="username">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <div class="label-with-action">
+              <label for="login-password">Master Passphrase</label>
+              <button type="button" class="link-btn" onclick="switchAuthTab('forgot')">Forgot Password?</button>
+            </div>
+            <div class="input-wrapper">
+              <span class="input-icon">🔒</span>
+              <input type="password" id="login-password" placeholder="Enter master passphrase" required autocomplete="current-password">
+              <button type="button" class="btn-toggle-eye" onclick="togglePasswordVisibility('login-password')">👁️</button>
+            </div>
+          </div>
+
+          <div id="login-feedback" class="alert-box hidden"></div>
+
+          <button type="submit" id="btn-login-submit" class="btn btn-primary btn-block">
+            <span>🚀 Authenticate & Unlock Vault</span>
+          </button>
+        </form>
+
+        <!-- Form 2: Register Form (With Custom Username & Security Question) -->
+        <form id="register-form" class="auth-form hidden" onsubmit="handleRegister(event)">
+          <div class="form-group">
+            <label for="reg-username">Username (Account Identifier)</label>
+            <div class="input-wrapper">
+              <span class="input-icon">👤</span>
+              <input type="text" id="reg-username" placeholder="e.g. agent_shield" required autocomplete="username">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="reg-displayname">Full Name</label>
+            <div class="input-wrapper">
+              <span class="input-icon">🏷️</span>
+              <input type="text" id="reg-displayname" placeholder="e.g. Alex Vance" required autocomplete="name">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="reg-email">Email Address</label>
+            <div class="input-wrapper">
+              <span class="input-icon">📧</span>
+              <input type="email" id="reg-email" placeholder="name@domain.com" required autocomplete="email">
+            </div>
+          </div>
+
+          <!-- Security Recovery Challenge -->
+          <div class="form-group">
+            <label for="reg-security-question">Security Recovery Question</label>
+            <div class="input-wrapper">
+              <span class="input-icon">🛡️</span>
+              <select id="reg-security-question" class="custom-select" onchange="handleSecurityQuestionChange(this.value)">
+                <option value="What was the name of your first security key or pet?">What was the name of your first security key or pet?</option>
+                <option value="What city were you born in?">What city were you born in?</option>
+                <option value="What is your favorite encrypted code word?">What is your favorite encrypted code word?</option>
+                <option value="What was the model of your first computer?">What was the model of your first computer?</option>
+                <option value="__custom__">Write a custom security question...</option>
+              </select>
+            </div>
+            <div id="reg-custom-question-box" class="hidden" style="margin-top: 0.5rem;">
+              <input type="text" id="reg-custom-question" placeholder="Enter your custom recovery question..." class="input-field">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="reg-security-answer">Security Recovery Answer</label>
+            <div class="input-wrapper">
+              <span class="input-icon">🔑</span>
+              <input type="text" id="reg-security-answer" placeholder="Enter your secret recovery answer" required>
+            </div>
+            <p class="text-muted text-small" style="margin-top: 0.25rem;">Hashed with zero-knowledge PBKDF2. Used if you forget your master password.</p>
+          </div>
+
+          <div class="form-group">
+            <label for="reg-password">Master Password</label>
+            <div class="input-wrapper">
+              <span class="input-icon">🔒</span>
+              <input type="password" id="reg-password" placeholder="Min 8 chars with mixed cases, digits, symbols" required oninput="evaluateStrength(this.value)">
+              <button type="button" class="btn-toggle-eye" onclick="togglePasswordVisibility('reg-password')">👁️</button>
+            </div>
+            <!-- Password Strength Bar -->
+            <div class="strength-meter">
+              <div id="strength-bar" class="strength-bar-fill"></div>
+            </div>
+            <div id="strength-text" class="strength-label">Password complexity: None</div>
+          </div>
+
+          <div class="form-group">
+            <label for="reg-confirm">Confirm Password</label>
+            <div class="input-wrapper">
+              <span class="input-icon">✅</span>
+              <input type="password" id="reg-confirm" placeholder="Repeat your master password" required>
+            </div>
+          </div>
+
+          <div id="reg-feedback" class="alert-box hidden"></div>
+
+          <button type="submit" id="btn-reg-submit" class="btn btn-accent btn-block">
+            <span>✨ Create Secure Account & Unlock</span>
+          </button>
+        </form>
+
+        <!-- Form 3: Forgot Password Recovery Form -->
+        <form id="forgot-form" class="auth-form hidden" onsubmit="handleForgotPasswordSubmit(event)">
+          <!-- Step 1: Find Username -->
+          <div id="forgot-step-1">
+            <p class="text-muted text-small" style="margin-bottom: 1rem;">
+              Enter your username or registered email address to locate your security recovery challenge.
+            </p>
+            <div class="form-group">
+              <label for="forgot-username">Username or Email</label>
+              <div class="input-wrapper">
+                <span class="input-icon">👤</span>
+                <input type="text" id="forgot-username" placeholder="Enter your username or email" required>
+              </div>
+            </div>
+            <button type="button" class="btn btn-primary btn-block" onclick="lookupSecurityQuestion()">
+              <span>🔍 Find Account & Load Security Challenge</span>
+            </button>
+          </div>
+
+          <!-- Step 2: Answer Challenge & Reset Password (Hidden initially) -->
+          <div id="forgot-step-2" class="hidden">
+            <div class="security-challenge-banner">
+              <span class="text-muted text-small">Security Challenge Question:</span>
+              <h4 id="forgot-question-text" class="text-cyan" style="margin-top: 0.25rem;">Question...</h4>
+            </div>
+
+            <div class="form-group" style="margin-top: 1rem;">
+              <label for="forgot-answer">Your Security Recovery Answer</label>
+              <div class="input-wrapper">
+                <span class="input-icon">🔑</span>
+                <input type="text" id="forgot-answer" placeholder="Enter your secret answer" required>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="forgot-new-password">New Master Password</label>
+              <div class="input-wrapper">
+                <span class="input-icon">🔒</span>
+                <input type="password" id="forgot-new-password" placeholder="Enter new master password" required oninput="evaluateForgotStrength(this.value)">
+                <button type="button" class="btn-toggle-eye" onclick="togglePasswordVisibility('forgot-new-password')">👁️</button>
+              </div>
+              <div class="strength-meter">
+                <div id="forgot-strength-bar" class="strength-bar-fill"></div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="forgot-confirm-password">Confirm New Password</label>
+              <div class="input-wrapper">
+                <span class="input-icon">✅</span>
+                <input type="password" id="forgot-confirm-password" placeholder="Repeat new master password" required>
+              </div>
+            </div>
+
+            <button type="submit" id="btn-forgot-reset" class="btn btn-accent btn-block">
+              <span>🔄 Reset Master Password & Unlock</span>
+            </button>
+          </div>
+
+          <div id="forgot-feedback" class="alert-box hidden" style="margin-top: 1rem;"></div>
+        </form>
+
+      </div>
+    </div>
+
+    <!-- ================================================================
+         APPLICATION WORKSPACE (ACCESSIBLE ONLY AFTER AUTHENTICATION)
+         ================================================================ -->
+    <div id="app-workspace" class="app-workspace hidden">
+      <!-- Header -->
+      <header class="app-header">
+        <div class="logo-area" onclick="switchNavTab('vault-studio')" style="cursor: pointer;">
+          <div class="logo-shield-badge">
+            <span class="logo-shield">🛡️</span>
+          </div>
+          <div>
+            <h1 class="logo-title">AEGIS VAULT</h1>
+            <p class="logo-subtitle">MILITARY-GRADE AES-256-GCM STREAMING • PBKDF2 600K</p>
+          </div>
+        </div>
+
+        <!-- Right Header Section -->
+        <div class="header-right">
+          <!-- Node Status Indicator -->
+          <div id="status-indicator-box" class="status-indicator">
+            <span class="status-pulse" id="server-status-pulse"></span>
+            <span id="server-status-text">Connected to Node</span>
+          </div>
+
+          <div class="header-actions">
+            <button type="button" id="btn-sfx-toggle" class="header-action-btn header-action-btn--active" onclick="toggleSFX()">
+              <span id="sfx-icon">🔊</span> <span id="sfx-text">SFX On</span>
+            </button>
+            <button type="button" class="header-action-btn" onclick="openShortcutsModal()">
+              <span>⌨️</span> Shortcuts
+            </button>
+          </div>
+
+          <!-- User Profile Widget (Active when logged in) -->
+          <div id="header-user-profile" class="header-user-profile" onclick="toggleProfileDropdown()">
+            <div class="header-avatar" id="header-avatar-initial">U</div>
+            <div class="header-user-info">
+              <span class="header-display-name" id="header-display-name">Username</span>
+              <span class="header-username" id="header-username">USER ID • username</span>
+            </div>
+            <span class="badge-status-dot" title="Active Session">●</span>
+
+            <!-- Top Right Profile Dropdown Menu -->
+            <div id="profile-dropdown-menu" class="profile-dropdown hidden" onclick="event.stopPropagation()">
+              <div class="dropdown-user-header">
+                <div class="dropdown-avatar" id="dropdown-avatar-initial">U</div>
+                <div>
+                  <strong id="dropdown-display-name">Username</strong>
+                  <p class="text-muted text-small" id="dropdown-email">user@domain.com</p>
+                </div>
+              </div>
+              <div class="dropdown-divider"></div>
+              <div class="dropdown-item-info">
+                <span class="text-muted">Member Since:</span>
+                <span id="dropdown-created" class="font-mono text-small">Just now</span>
+              </div>
+              <div class="dropdown-item-info">
+                <span class="text-muted">Session Token:</span>
+                <span id="dropdown-token" class="font-mono text-small text-cyan">Active</span>
+              </div>
+              <div class="dropdown-divider"></div>
+              <button class="btn btn-secondary btn-block btn-sm" onclick="openChangePasswordModal()">
+                <span>🔒</span> Change Password
+              </button>
+              <button class="btn btn-danger btn-block btn-sm" style="margin-top: 0.5rem;" onclick="handleLogout()">
+                <span>🚪</span> Sign Out
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </header>
+
+      <!-- Top Navigation Pill Bar (Exact match to screenshot) -->
+      <nav class="main-nav-bar">
+        <button type="button" id="nav-vault-studio" class="nav-pill active" onclick="switchNavTab('vault-studio')">
+          <span class="nav-icon">🛡️</span> Vault Studio
+        </button>
+        <button type="button" id="nav-encrypted-safe" class="nav-pill" onclick="switchNavTab('encrypted-safe')">
+          <span class="nav-icon">📁</span> Encrypted Safe <span id="safe-count-badge" class="pill-count">0</span>
+        </button>
+        <button type="button" id="nav-secv-inspector" class="nav-pill" onclick="switchNavTab('secv-inspector')">
+          <span class="nav-icon">🔍</span> SECV Inspector
+        </button>
+        <button type="button" id="nav-passphrase-fortress" class="nav-pill" onclick="switchNavTab('passphrase-fortress')">
+          <span class="nav-icon">🔑</span> Passphrase Fortress
+        </button>
+        <button type="button" id="nav-security-audit" class="nav-pill" onclick="switchNavTab('security-audit')">
+          <span class="nav-icon">📊</span> Security Audit
+        </button>
+        <button type="button" id="nav-benchmark-lab" class="nav-pill" onclick="switchNavTab('benchmark-lab')">
+          <span class="nav-icon">⚡</span> Benchmark Lab
+        </button>
+      </nav>
+
+      <!-- Main Content Area -->
+      <main class="main-content">
+
+        <!-- ================================================================
+             TAB 1: VAULT STUDIO (2-COLUMN LAYOUT MATCHING SCREENSHOT)
+             ================================================================ -->
+        <section id="tab-view-vault-studio" class="tab-view active">
+          <div class="vault-studio-grid">
+
+            <!-- Left Card: Workstation File Encryption & Decryption -->
+            <div class="card glass-card vault-workstation-card">
+            <div class="card-header-bar">
+              <div class="title-with-badge">
+                <span class="header-icon-badge" id="vault-mode-badge-icon">🔒</span>
+                <div>
+                  <h3 id="vault-mode-title">Encrypt File to SECV Vault</h3>
+                  <p id="vault-mode-subtitle" class="text-muted text-small">Authenticated AES-256-GCM chunk streaming with anti-tamper AAD</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Encrypt / Decrypt Segmented Toggle Pills -->
+            <div class="mode-toggle-pill-wrapper">
+              <button type="button" id="btn-mode-enc" class="mode-toggle-pill active" onclick="setVaultStudioMode('encrypt')">
+                <span>🔒</span> Encrypt to .vault
+              </button>
+              <button type="button" id="btn-mode-dec" class="mode-toggle-pill" onclick="setVaultStudioMode('decrypt')">
+                <span>🔓</span> Decrypt .vault File
+              </button>
+            </div>
+
+            <!-- Large File Dropzone with Animated Cloud / Lock Illustration -->
+            <div id="vault-dropzone" class="file-dropzone" onclick="document.getElementById('vault-file-input').click()">
+              <input type="file" id="vault-file-input" class="hidden" onchange="handleVaultFile(this.files)">
+              <div class="dropzone-inner">
+                <div class="dropzone-graphic">
+                  <div class="dropzone-icon-glow">
+                    <span id="dropzone-icon" class="dropzone-icon">📥</span>
+                  </div>
+                </div>
+                <div class="dropzone-text" id="dropzone-text">Drag & drop your file here, or click to browse</div>
+                <div class="dropzone-subtext" id="dropzone-subtext">Supports all file types (Documents, Archives, Images, Databases)</div>
+              </div>
+            </div>
+
+            <!-- Selected File Info Banner -->
+            <div id="vault-file-selected-box" class="selected-file-box hidden">
+              <div class="file-icon-box" id="file-icon-box">📄</div>
+              <div class="file-info-text">
+                <div class="file-name" id="selected-file-name">document.pdf</div>
+                <div class="file-meta" id="selected-file-meta">0 KB • Ready</div>
+              </div>
+              <button type="button" class="btn-clear-file" onclick="clearVaultFile()" title="Clear Selection">✖</button>
+            </div>
+
+            <!-- Master Encryption Passphrase Input Row -->
+            <div class="form-group" style="margin-top: 1.25rem;">
+              <div class="label-with-action">
+                <label for="vault-passphrase-input" id="vault-passphrase-label">Master Encryption Passphrase</label>
+                <button type="button" class="link-btn" onclick="quickGeneratePassword()">
+                  <span>⚡</span> Quick Generate
+                </button>
+              </div>
+              <div class="input-wrapper">
+                <span class="input-icon">🔒</span>
+                <input type="password" id="vault-passphrase-input" placeholder="Enter strong master passphrase..." oninput="updateVaultButtonState()">
+                <button type="button" class="btn-input-icon" onclick="togglePasswordVisibility('vault-passphrase-input')" title="Toggle Visibility">👁️</button>
+                <button type="button" class="btn-input-icon" onclick="copyPassphraseInput()" title="Copy Passphrase">📋</button>
+              </div>
+            </div>
+
+            <!-- Execute Button -->
+            <button type="button" id="btn-vault-action" class="btn btn-primary btn-block btn-lg" onclick="executeVaultCrypto()" disabled>
+              <span id="btn-vault-action-label">Select a file to begin</span>
+            </button>
+
+            <!-- Real-time Progress Bar & Telemetry -->
+            <div id="vault-progress-box" class="vault-progress-box hidden">
+              <div class="progress-labels">
+                <span id="vault-progress-status" class="text-cyan font-mono text-small">Deriving PBKDF2 Key (600,000 iters)...</span>
+                <span id="vault-progress-pct" class="font-mono text-small">0%</span>
+              </div>
+              <div class="progress-bar-track">
+                <div id="vault-progress-fill" class="progress-bar-fill" style="width: 0%;"></div>
+              </div>
+              <div class="progress-telemetry-row">
+                <span id="vault-speed-lbl" class="text-muted text-small font-mono">⚡ Speed: -- MB/s</span>
+                <span id="vault-chunks-lbl" class="text-muted text-small font-mono">📦 Chunks: 0 / 0</span>
+              </div>
+            </div>
+
+            <!-- Operation Success & Download Result Box -->
+            <div id="vault-result-box" class="vault-result-box hidden">
+              <div class="result-msg-row">
+                <span class="result-icon">✅</span>
+                <div>
+                  <strong id="result-title">Operation Successful!</strong>
+                  <p id="result-desc" class="text-muted text-small">File processed with 128-bit authentication tags and anti-tamper AAD.</p>
+                </div>
+              </div>
+              <div class="result-actions">
+                <a id="btn-download-result" class="btn btn-accent btn-sm" href="#" download>
+                  <span>⬇️</span> Download <span id="download-filename">file.vault</span>
+                </a>
+                <button type="button" id="btn-save-to-safe" class="btn btn-secondary btn-sm" onclick="saveCurrentResultToSafe()">
+                  <span>📁</span> Save to Safe
+                </button>
+                <button type="button" id="btn-preview-plaintext" class="btn btn-secondary btn-sm hidden" onclick="previewPlaintextResult()">
+                  <span>👁️</span> Preview
+                </button>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Right Card: Security Engine Specs (Exact match to screenshot!) -->
+          <div class="card glass-card specs-card">
+            <div class="card-header-bar">
+              <div class="title-with-badge">
+                <span class="header-icon-badge">🛡️</span>
+                <div>
+                  <h3>Security Engine Specs</h3>
+                  <p class="text-muted text-small">Java 25 & Python 3.12 Interoperable Architecture</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="specs-table">
+              <div class="spec-row">
+                <div class="spec-label">
+                  <span class="spec-icon">🔒</span> Cipher Algorithm
+                </div>
+                <div class="spec-value text-cyan font-mono font-bold">AES-256-GCM (AEAD)</div>
+              </div>
+
+              <div class="spec-row">
+                <div class="spec-label">
+                  <span class="spec-icon">⚡</span> Key Derivation
+                </div>
+                <div class="spec-value font-mono">PBKDF2-HMAC-SHA256</div>
+              </div>
+
+              <div class="spec-row">
+                <div class="spec-label">
+                  <span class="spec-icon">🔢</span> KDF Iterations
+                </div>
+                <div class="spec-value text-accent font-mono">600,000 (OWASP Std)</div>
+              </div>
+
+              <div class="spec-row">
+                <div class="spec-label">
+                  <span class="spec-icon">📦</span> Streaming Chunks
+                </div>
+                <div class="spec-value font-mono">64 KB (O(1) RAM)</div>
+              </div>
+
+              <div class="spec-row">
+                <div class="spec-label">
+                  <span class="spec-icon">🛡️</span> Tamper Proofing
+                </div>
+                <div class="spec-value text-cyan font-mono">17-byte AAD Anti-Reorder</div>
+              </div>
+
+              <div class="spec-row">
+                <div class="spec-label">
+                  <span class="spec-icon">🏷️</span> File Header
+                </div>
+                <div class="spec-value font-mono">SECV (Version 1, 37B)</div>
+              </div>
+
+              <div class="spec-row">
+                <div class="spec-label">
+                  <span class="spec-icon">🌐</span> Cross Compatibility
+                </div>
+                <div class="spec-value text-accent font-mono">Python • Java • Web 100%</div>
+              </div>
+            </div>
+
+            <!-- Quick Engine Status & Security Telemetry Chip -->
+            <div class="specs-footer-card">
+              <div class="engine-live-badge">
+                <span class="status-dot-green"></span>
+                <span>Active Cryptographic Core Ready</span>
+              </div>
+              <p class="text-muted text-small" style="margin-top: 0.4rem;">
+                Zero-knowledge in-memory streaming guarantees plaintext is never saved unencrypted to disk during transformation.
+              </p>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ================================================================
+           TAB 2: ENCRYPTED SAFE (LOCAL SECURE LOCKER)
+           ================================================================ -->
+      <section id="tab-view-encrypted-safe" class="tab-view">
+        <div class="card glass-card">
+          <div class="card-title-bar">
+            <div class="title-with-badge">
+              <span class="header-icon-badge">📁</span>
+              <div>
+                <h3>Encrypted Safe (Local Locker)</h3>
+                <p class="text-muted text-small">Secure persistent IndexedDB storage for your protected .vault files</p>
+              </div>
+            </div>
+            <div class="safe-actions-row">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="exportSafeManifest()">
+                <span>📤</span> Export Safe
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('import-safe-input').click()">
+                <span>📥</span> Import Safe
+              </button>
+              <input type="file" id="import-safe-input" class="hidden" accept=".json,.vault" onchange="importSafeManifest(this.files)">
+            </div>
+          </div>
+
+          <!-- Search & Filter Bar -->
+          <div class="safe-toolbar">
+            <div class="input-wrapper" style="flex: 1;">
+              <span class="input-icon">🔍</span>
+              <input type="text" id="safe-search-input" placeholder="Search saved encrypted files..." oninput="filterSafeItems()">
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" onclick="switchNavTab('vault-studio')">
+              <span>➕</span> Encrypt New File
+            </button>
+          </div>
+
+          <!-- Safe Items List Container -->
+          <div id="safe-items-container" class="safe-items-grid">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================
+           TAB 3: SECV BINARY HEADER INSPECTOR
+           ================================================================ -->
+      <section id="tab-view-secv-inspector" class="tab-view">
+        <div class="card glass-card">
+          <div class="card-title-bar">
+            <div class="title-with-badge">
+              <span class="header-icon-badge">🔍</span>
+              <div>
+                <h3>SECV Binary Header & Structure Inspector</h3>
+                <p class="text-muted text-small">Dissect 37-byte SECV cryptographic header, CSPRNG salts, nonces, and chunk tags</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="inspector-dropzone" onclick="document.getElementById('inspector-file-input').click()">
+            <input type="file" id="inspector-file-input" class="hidden" onchange="inspectVaultHeader(this.files)">
+            <div class="dropzone-inner">
+              <span class="dropzone-icon">🔬</span>
+              <div class="dropzone-text">Drop a .vault file to inspect internal binary header</div>
+              <div class="dropzone-subtext">Parses 0x53454356 magic identifier, PBKDF2 salt, base nonce & AAD</div>
+            </div>
+          </div>
+
+          <div id="inspector-result-box" class="inspector-result hidden">
+            <h4 class="text-cyan" style="margin-bottom: 0.75rem;">Header Analysis Breakdown</h4>
+            <div class="inspector-grid" id="inspector-fields-grid">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================
+           TAB 4: PASSPHRASE FORTRESS & GENERATOR
+           ================================================================ -->
+      <section id="tab-view-passphrase-fortress" class="tab-view">
+        <div class="passphrase-fortress-grid">
+
+          <!-- Generator Card -->
+          <div class="card glass-card">
+            <div class="card-title-bar">
+              <div class="title-with-badge">
+                <span class="header-icon-badge">🔑</span>
+                <div>
+                  <h3>Passphrase Fortress & Generator</h3>
+                  <p class="text-muted text-small">High-entropy cryptographic generator & Diceware memorable passphrases</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Output Display Box -->
+            <div class="passphrase-display-box">
+              <div id="generated-passphrase-display" class="passphrase-text font-mono">Generating...</div>
+              <div class="passphrase-actions">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="copyGeneratedPassphrase()" title="Copy to Clipboard">
+                  <span>📋</span> Copy
+                </button>
+                <button type="button" class="btn btn-primary btn-sm" onclick="generateFortressPassphrase()" title="Regenerate">
+                  <span>🎲</span> Generate
+                </button>
+              </div>
+            </div>
+
+            <!-- Mode Selector -->
+            <div class="generator-mode-tabs">
+              <button type="button" id="btn-gen-mode-random" class="tab-btn active" onclick="setGeneratorMode('random')">
+                <span>🔐</span> High-Entropy Characters
+              </button>
+              <button type="button" id="btn-gen-mode-diceware" class="tab-btn" onclick="setGeneratorMode('diceware')">
+                <span>📚</span> Diceware Words
+              </button>
+            </div>
+
+            <!-- Random Character Controls -->
+            <div id="gen-controls-random">
+              <div class="form-group" style="margin-top: 1rem;">
+                <div class="label-with-action">
+                  <label for="gen-length-slider">Length: <span id="gen-length-val" class="text-cyan font-bold">24</span> characters</label>
+                </div>
+                <input type="range" id="gen-length-slider" min="8" max="64" value="24" class="custom-range" oninput="updateGeneratorLength(this.value)">
+              </div>
+
+              <div class="checkbox-grid">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="chk-uppercase" checked onchange="generateFortressPassphrase()">
+                  <span>Uppercase (A-Z)</span>
+                </label>
+                <label class="checkbox-label">
+                  <input type="checkbox" id="chk-lowercase" checked onchange="generateFortressPassphrase()">
+                  <span>Lowercase (a-z)</span>
+                </label>
+                <label class="checkbox-label">
+                  <input type="checkbox" id="chk-numbers" checked onchange="generateFortressPassphrase()">
+                  <span>Numbers (0-9)</span>
+                </label>
+                <label class="checkbox-label">
+                  <input type="checkbox" id="chk-symbols" checked onchange="generateFortressPassphrase()">
+                  <span>Symbols (!@#$%^&*)</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Diceware Controls -->
+            <div id="gen-controls-diceware" class="hidden">
+              <div class="form-group" style="margin-top: 1rem;">
+                <div class="label-with-action">
+                  <label for="gen-words-slider">Word Count: <span id="gen-words-val" class="text-cyan font-bold">5</span> words</label>
+                </div>
+                <input type="range" id="gen-words-slider" min="3" max="8" value="5" class="custom-range" oninput="updateGeneratorWords(this.value)">
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Entropy & Brute Force Estimator Card -->
+          <div class="card glass-card">
+            <div class="card-title-bar">
+              <div class="title-with-badge">
+                <span class="header-icon-badge">🛡️</span>
+                <div>
+                  <h3>Entropy & Crack-Time Estimator</h3>
+                  <p class="text-muted text-small">Mathematical defense rating against supercomputer brute-force attacks</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Entropy Meter Card -->
+            <div class="entropy-card">
+              <div class="entropy-header">
+                <span>Calculated Entropy:</span>
+                <span id="entropy-bits-val" class="font-mono text-cyan font-bold text-large">128.4 Bits</span>
+              </div>
+              <div class="strength-meter" style="margin-top: 0.5rem;">
+                <div id="fortress-strength-bar" class="strength-bar-fill" style="width: 100%; background: var(--accent);"></div>
+              </div>
+              <div id="fortress-rating-text" class="text-accent text-small" style="margin-top: 0.4rem; font-weight: 600;">
+                NIST SP 800-63B Compliant • Military Grade
+              </div>
+            </div>
+
+            <!-- Crack Time Table -->
+            <div class="crack-time-table">
+              <div class="spec-row">
+                <div class="spec-label">🖥️ Single CPU Core (1 MH/s)</div>
+                <div id="crack-cpu" class="spec-value text-accent font-mono">> 100 Trillion Years</div>
+              </div>
+              <div class="spec-row">
+                <div class="spec-label">⚡ RTX 4090 GPU Array (100 MH/s)</div>
+                <div id="crack-gpu" class="spec-value text-accent font-mono">> 1 Trillion Years</div>
+              </div>
+              <div class="spec-row">
+                <div class="spec-label">🌐 Distributed Botnet (10 GH/s)</div>
+                <div id="crack-botnet" class="spec-value text-cyan font-mono">> 10 Billion Years</div>
+              </div>
+              <div class="spec-row">
+                <div class="spec-label">⚛️ Quantum Supercomputer</div>
+                <div id="crack-quantum" class="spec-value text-cyan font-mono">> 500 Million Years</div>
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+      </section>
+
+      <!-- Full-screen Auth Gateway -->
+      <div id="auth-gateway-screen" class="auth-gateway-overlay">
+        <!-- Login/Register/Forgot forms would be injected here -->
+      </div>
+
+      <!-- App Workspace (Unlocks after auth) -->
+      <div id="app-workspace" class="hidden">
+
+      <!-- ================================================================
+           TAB 5: IDENTITY & AUTH (USER SECURITY PROFILE DASHBOARD)
+           ================================================================ -->
+      <section id="tab-view-identity-auth" class="tab-view">
+
+        <!-- User Profile & Account Dashboard -->
+        <div id="auth-dashboard-container" class="card glass-card">
+          <div class="card-title-bar">
+            <div class="title-with-badge">
+              <span class="header-icon-badge">👤</span>
+              <div>
+                <h3 id="dash-welcome-title">User Account & Security Profile</h3>
+                <p class="text-muted text-small">Active zero-knowledge authenticated session</p>
+              </div>
+            </div>
+            <button type="button" class="btn btn-danger btn-sm" onclick="handleLogout()">
+              <span>🚪</span> Sign Out
+            </button>
+          </div>
+
+          <div class="user-profile-details-grid">
+            <div class="profile-stat-box">
+              <span class="stat-label">Username</span>
+              <strong id="dash-username-val" class="stat-value text-cyan">--</strong>
+            </div>
+            <div class="profile-stat-box">
+              <span class="stat-label">Display Name</span>
+              <strong id="dash-displayname-val" class="stat-value">--</strong>
+            </div>
+            <div class="profile-stat-box">
+              <span class="stat-label">Registered Email</span>
+              <strong id="dash-email-val" class="stat-value">--</strong>
+            </div>
+            <div class="profile-stat-box">
+              <span class="stat-label">Member Since</span>
+              <strong id="dash-created-val" class="stat-value">--</strong>
+            </div>
+            <div class="profile-stat-box" style="grid-column: 1 / -1;">
+              <span class="stat-label">Active 256-bit Session Token</span>
+              <strong id="dash-token-val" class="stat-value font-mono text-cyan" style="word-break: break-all;">--</strong>
+            </div>
+          </div>
+
+          <div class="profile-actions-bar">
+            <button type="button" class="btn btn-primary" onclick="openChangePasswordModal()">
+              <span>🔒</span> Change Master Password
+            </button>
+            <button type="button" class="btn btn-secondary" onclick="switchNavTab('vault-studio')">
+              <span>🛡️</span> Open Vault Studio
+            </button>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ================================================================
+           TAB 6: SECURITY AUDIT & TELEMETRY
+           ================================================================ -->
+      <section id="tab-view-security-audit" class="tab-view">
+        <div class="card glass-card">
+          <div class="card-title-bar">
+            <div class="title-with-badge">
+              <span class="header-icon-badge">📜</span>
+              <div>
+                <h3>Security Audit Trail & Telemetry</h3>
+                <p class="text-muted text-small">Real-time tamper-evident log of authentication, encryptions, and lockout defenses</p>
+              </div>
+            </div>
+            <div class="safe-actions-row">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="loadAuditLogs()">
+                <span>🔄</span> Refresh
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="exportAuditLogsCsv()">
+                <span>📥</span> Export CSV
+              </button>
+            </div>
+          </div>
+
+          <!-- Filter Pills -->
+          <div class="audit-filter-pills">
+            <button type="button" class="filter-pill active" onclick="filterAuditEvents('ALL', this)">All Events</button>
+            <button type="button" class="filter-pill" onclick="filterAuditEvents('AUTH', this)">Authentication</button>
+            <button type="button" class="filter-pill" onclick="filterAuditEvents('CRYPTO', this)">Vault Crypto</button>
+            <button type="button" class="filter-pill" onclick="filterAuditEvents('RESET', this)">Password Resets</button>
+            <button type="button" class="filter-pill" onclick="filterAuditEvents('LOCKOUT', this)">Lockouts & Defenses</button>
+          </div>
+
+          <div class="audit-table-wrapper">
+            <table class="audit-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Event Type</th>
+                  <th>User / IP</th>
+                  <th>Details & Security Context</th>
+                </tr>
+              </thead>
+              <tbody id="audit-logs-body">
+                <tr>
+                  <td colspan="4" class="text-center text-muted">Loading security audit records...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================
+           TAB 7: BENCHMARK LAB (PERFORMANCE GAUGE)
+           ================================================================ -->
+      <section id="tab-view-benchmark-lab" class="tab-view">
+        <div class="benchmark-grid">
+
+          <div class="card glass-card">
+            <div class="card-title-bar">
+              <div class="title-with-badge">
+                <span class="header-icon-badge">⚡</span>
+                <div>
+                  <h3>Cryptographic Benchmark Lab</h3>
+                  <p class="text-muted text-small">Live performance analysis for PBKDF2 600K key derivation & AES-GCM streaming throughput</p>
+                </div>
+              </div>
+              <button type="button" id="btn-run-benchmark" class="btn btn-primary" onclick="runCryptoBenchmark()">
+                <span>🚀</span> Run Crypto Benchmark
+              </button>
+            </div>
+
+            <!-- Benchmark Metrics Cards -->
+            <div class="benchmark-metrics-row">
+              <div class="benchmark-stat-card">
+                <div class="benchmark-icon">🔑</div>
+                <div class="benchmark-num" id="bench-pbkdf2-time">-- ms</div>
+                <div class="benchmark-sub">PBKDF2-HMAC-SHA256 (600,000 Iters)</div>
+              </div>
+
+              <div class="benchmark-stat-card">
+                <div class="benchmark-icon">⚡</div>
+                <div class="benchmark-num text-cyan" id="bench-aes-throughput">-- MB/s</div>
+                <div class="benchmark-sub">AES-256-GCM Streaming Encryption</div>
+              </div>
+
+              <div class="benchmark-stat-card">
+                <div class="benchmark-icon">🏆</div>
+                <div class="benchmark-num text-accent" id="bench-score">--</div>
+                <div class="benchmark-sub">Hardware Cryptographic Index</div>
+              </div>
+            </div>
+
+            <div id="benchmark-log" class="benchmark-log-box font-mono text-small">
+              Click 'Run Crypto Benchmark' to test local CPU cryptographic acceleration.
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Modals -->
+
+    <!-- Change Password Modal -->
+    <div id="pwd-modal" class="modal-backdrop hidden">
+      <div class="modal-card glass-card">
+        <div class="modal-header">
+          <h3>Change Master Password</h3>
+          <button type="button" class="modal-close" onclick="closeChangePasswordModal()">✖</button>
+        </div>
+        <form onsubmit="handleChangePassword(event)">
+          <div class="form-group">
+            <label for="current-password">Current Password</label>
+            <input type="password" id="current-password" required class="input-field">
+          </div>
+          <div class="form-group">
+            <label for="new-password">New Master Password</label>
+            <input type="password" id="new-password" required class="input-field">
+          </div>
+          <div id="modal-feedback" class="alert-box hidden"></div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" onclick="closeChangePasswordModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Update Password</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Shortcuts Modal -->
+    <div id="shortcuts-modal" class="modal-backdrop hidden">
+      <div class="modal-card glass-card">
+        <div class="modal-header">
+          <h3>Keyboard Shortcuts</h3>
+          <button type="button" class="modal-close" onclick="closeShortcutsModal()">✖</button>
+        </div>
+        <div class="shortcuts-list">
+          <div class="shortcut-row"><kbd>Ctrl + E</kbd> <span>Open Vault Studio (Encrypt)</span></div>
+          <div class="shortcut-row"><kbd>Ctrl + D</kbd> <span>Open Vault Studio (Decrypt)</span></div>
+          <div class="shortcut-row"><kbd>Ctrl + S</kbd> <span>Open Encrypted Safe</span></div>
+          <div class="shortcut-row"><kbd>Ctrl + G</kbd> <span>Open Passphrase Fortress</span></div>
+          <div class="shortcut-row"><kbd>Ctrl + I</kbd> <span>Open Identity & Auth</span></div>
+          <div class="shortcut-row"><kbd>Ctrl + B</kbd> <span>Open Benchmark Lab</span></div>
+          <div class="shortcut-row"><kbd>Esc</kbd> <span>Close Any Modal Dialog</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Plaintext Preview Modal -->
+    <div id="preview-modal" class="modal-backdrop hidden">
+      <div class="modal-card glass-card" style="max-width: 800px; width: 90%;">
+        <div class="modal-header">
+          <h3 id="preview-modal-title">Decrypted File Preview</h3>
+          <button type="button" class="modal-close" onclick="closePreviewModal()">✖</button>
+        </div>
+        <div id="preview-modal-body" style="max-height: 500px; overflow: auto; margin-top: 1rem;"></div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>Aegis Vault &copy; 2026 • Military-Grade Cryptography & Zero-Knowledge Architecture</p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
