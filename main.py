@@ -150,7 +150,7 @@ class ModernCryptoApp(ctk.CTk):
 
         pass_header = ctk.CTkLabel(
             self.pass_card,
-            text="🔑  Security Passphrase",
+            text="  Security Passphrase",
             font=ctk.CTkFont(size=14, weight="bold"),
             text_color="#f1f5f9",
         )
@@ -172,7 +172,7 @@ class ModernCryptoApp(ctk.CTk):
 
         self.show_pass_btn = ctk.CTkButton(
             pass_row,
-            text="👁️",
+            text="Show",
             width=40,
             height=36,
             fg_color="#334155",
@@ -183,7 +183,7 @@ class ModernCryptoApp(ctk.CTk):
 
         self.gen_pass_btn = ctk.CTkButton(
             pass_row,
-            text="🎲 Generate",
+            text=" Generate",
             width=90,
             height=36,
             fg_color="#4338ca",
@@ -226,7 +226,7 @@ class ModernCryptoApp(ctk.CTk):
 
         self.status_title_lbl = ctk.CTkLabel(
             telemetry_header_row,
-            text="⚡  Status: Ready",
+            text=" Status: Ready",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#38bdf8",
         )
@@ -298,7 +298,7 @@ class ModernCryptoApp(ctk.CTk):
 
         self.copy_btn = ctk.CTkButton(
             result_actions_row,
-            text="📋 Copy Path",
+            text=" Copy Path",
             width=100,
             height=28,
             font=ctk.CTkFont(size=11, weight="bold"),
@@ -310,7 +310,7 @@ class ModernCryptoApp(ctk.CTk):
 
         self.view_btn = ctk.CTkButton(
             result_actions_row,
-            text="👁️ View File",
+            text=" View File",
             width=100,
             height=28,
             font=ctk.CTkFont(size=11, weight="bold"),
@@ -394,7 +394,7 @@ class ModernCryptoApp(ctk.CTk):
             self.show_pass_btn.configure(text="🔒")
         else:
             self.pass_entry.configure(show="•")
-            self.show_pass_btn.configure(text="👁️")
+            self.show_pass_btn.configure(text="Show")
 
     def _generate_secure_password(self):
         # Generate 20-character high-entropy cryptographic password
@@ -462,7 +462,7 @@ class ModernCryptoApp(ctk.CTk):
 
         # Prepare UI for Background Execution
         self.is_processing = True
-        self.execute_btn.configure(state="disabled", text="⏳ Processing Vault Stream...")
+        self.execute_btn.configure(state="disabled", text=" Processing Vault Stream...")
         self.browse_btn.configure(state="disabled")
         self.mode_selector.configure(state="disabled")
         self.result_card.pack_forget()
@@ -470,7 +470,7 @@ class ModernCryptoApp(ctk.CTk):
         self.progress_bar.set(0)
         self.percent_lbl.configure(text="0%")
         self.status_title_lbl.configure(
-            text="⚡ Deriving 256-bit Key (PBKDF2 600K iterations)...",
+            text=" Deriving 256-bit Key (PBKDF2 600K iterations)...",
             text_color="#f59e0b",
         )
         self.metrics_lbl.configure(text="Initializing cryptographic engine...")
@@ -512,8 +512,13 @@ class ModernCryptoApp(ctk.CTk):
                     dir_name, base_name = os.path.split(output_path)
                     output_path = os.path.join(dir_name, f"restored_{base_name}")
 
+            last_ui_update = 0.0
             def progress_callback(processed: int, total: int):
-                self.after(0, self._update_progress, processed, total)
+                nonlocal last_ui_update
+                now = time.perf_counter()
+                if processed >= total or (now - last_ui_update) >= 0.05:
+                    last_ui_update = now
+                    self.after(0, self._update_progress, processed, total)
 
             if is_encrypt:
                 crypto_engine.encrypt_file(file_path, output_path, password, progress_callback=progress_callback)
@@ -539,7 +544,7 @@ class ModernCryptoApp(ctk.CTk):
 
         mode_str = "Encrypting" if "Encrypt" in self.mode_selector.get() else "Decrypting"
         self.status_title_lbl.configure(
-            text=f"⚡ {mode_str} Stream ({speed_str})",
+            text=f" {mode_str} Stream ({speed_str})",
             text_color="#38bdf8",
         )
         self.metrics_lbl.configure(text=f"{processed_str} of {total_str} processed • Elapsed: {elapsed:.1f}s")
@@ -571,7 +576,7 @@ class ModernCryptoApp(ctk.CTk):
 
         # Show Output Result Card
         self.result_lbl.configure(
-            text=f"🎉 File {action_name} Successfully!",
+            text=f" File {action_name} Successfully!",
             text_color="#a7f3d0",
         )
         self.result_path_lbl.configure(text=output_path)
@@ -615,6 +620,18 @@ class ModernCryptoApp(ctk.CTk):
     def _open_result_file(self):
         if not self.last_output_path or not os.path.exists(self.last_output_path):
             messagebox.showwarning("File Not Found", "The encrypted or decrypted output file is not available.")
+            return
+
+        # Mitigate arbitrary code execution: do not auto-launch dangerous executables
+        dangerous_exts = {".exe", ".bat", ".cmd", ".vbs", ".ps1", ".msi", ".scr", ".com", ".pif", ".jar", ".wsf"}
+        _, ext = os.path.splitext(self.last_output_path.lower())
+        if ext in dangerous_exts:
+            messagebox.showinfo(
+                "Security Safeguard",
+                f"For your protection, executable files ({ext}) cannot be launched directly from Aegis Vault.\n\n"
+                "The target folder has been opened in File Explorer instead."
+            )
+            self._open_output_folder()
             return
 
         try:

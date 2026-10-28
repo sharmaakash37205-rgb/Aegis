@@ -15,22 +15,56 @@ const CRYPTO_CONFIG = {
   NONCE_SIZE: 12,
   TAG_SIZE: 16,
   ITERATIONS: 600000,
-  CHUNK_SIZE: 64 * 1024,
+  CHUNK_SIZE: 2 * 1024 * 1024, // 2 MB high-throughput streaming chunks
 };
 
-// Global App State
-let authToken = localStorage.getItem('aegis_auth_token') || null;
-let currentUser = null;
+// Global App State (Sensitive credentials stored in ephemeral sessionStorage to prevent persistent XSS exposure)
+let authToken = sessionStorage.getItem('aegis_auth_token') || localStorage.getItem('aegis_auth_token') || null;
+let currentUser = JSON.parse(sessionStorage.getItem('aegis_user_profile') || localStorage.getItem('aegis_user_profile') || 'null');
+localStorage.removeItem('aegis_auth_token');
+localStorage.removeItem('aegis_user_profile');
+if (authToken) sessionStorage.setItem('aegis_auth_token', authToken);
+if (currentUser) sessionStorage.setItem('aegis_user_profile', JSON.stringify(currentUser));
+
 let vaultStudioMode = 'encrypt'; // 'encrypt' or 'decrypt'
 let selectedFile = null;
 let selectedFileBuffer = null;
 let lastResultBlob = null;
 let lastResultFilename = '';
+let lastSavedDesktopPath = '';
 let currentDecryptedPlaintext = null;
 let isProcessingCrypto = false;
 let sfxEnabled = localStorage.getItem('aegis_sfx') !== 'false';
 let activeAuditFilter = 'ALL';
 let currentNavTab = 'identity-auth';
+
+// High-speed chunk-safe base64 encoder for streaming IPC (uses browser C++ FileReader)
+function bytesToBase64Async(bytes) {
+  return new Promise((resolve) => {
+    try {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const url = reader.result;
+        const comma = url.indexOf(',');
+        resolve(comma >= 0 ? url.slice(comma + 1) : url);
+      };
+      reader.onerror = () => resolve(bytesToBase64(bytes));
+      reader.readAsDataURL(new Blob([bytes]));
+    } catch (e) {
+      resolve(bytesToBase64(bytes));
+    }
+  });
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  const len = bytes.byteLength;
+  const step = 0x8000;
+  for (let i = 0; i < len; i += step) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + step, len)));
+  }
+  return btoa(binary);
+}
 
 // Local Standalone Safe Storage Cache
 let localSafeItems = JSON.parse(localStorage.getItem('aegis_safe_items') || '[]');
@@ -202,8 +236,10 @@ async function handleLogin(e) {
       playSFX('unlock');
       authToken = data.token;
       currentUser = data.user;
-      localStorage.setItem('aegis_auth_token', authToken);
-      localStorage.setItem('aegis_user_profile', JSON.stringify(currentUser));
+      sessionStorage.setItem('aegis_auth_token', authToken);
+      sessionStorage.setItem('aegis_user_profile', JSON.stringify(currentUser));
+      localStorage.removeItem('aegis_auth_token');
+      localStorage.removeItem('aegis_user_profile');
       showAuthenticatedUI();
       logLocalAuditEvent('LOGIN_SUCCESS', currentUser.username, 'Login authenticated');
       setTimeout(() => {
@@ -248,6 +284,12 @@ async function handleRegister(e) {
     return;
   }
 
+  if (password.length > 128) {
+    playSFX('error');
+    showAlert(feedback, 'error', 'Password must not exceed 128 characters.');
+    return;
+  }
+
   if (password !== confirm) {
     playSFX('error');
     showAlert(feedback, 'error', 'Passwords do not match.');
@@ -276,8 +318,10 @@ async function handleRegister(e) {
       playSFX('success');
       authToken = data.token;
       currentUser = data.user;
-      localStorage.setItem('aegis_auth_token', authToken);
-      localStorage.setItem('aegis_user_profile', JSON.stringify(currentUser));
+      sessionStorage.setItem('aegis_auth_token', authToken);
+      sessionStorage.setItem('aegis_user_profile', JSON.stringify(currentUser));
+      localStorage.removeItem('aegis_auth_token');
+      localStorage.removeItem('aegis_user_profile');
       showAuthenticatedUI();
       logLocalAuditEvent('REGISTER_SUCCESS', currentUser.username, 'Account created successfully');
       setTimeout(() => {
@@ -334,21 +378,8 @@ async function lookupSecurityQuestion() {
       showAlert(feedback, 'error', data.error || 'No account found with this username.');
     }
   } catch (err) {
-    // Standalone local fallback
-    const localUsers = JSON.parse(localStorage.getItem('aegis_local_users') || '{}');
-    const user = localUsers[input.toLowerCase()];
-    if (user && user.securityQuestion) {
-      recoveryUsername = user.username;
-      document.getElementById('forgot-question-text').textContent = user.securityQuestion;
-      document.getElementById('forgot-step-1').classList.add('hidden');
-      document.getElementById('forgot-step-2').classList.remove('hidden');
-      playSFX('success');
-    } else {
-      recoveryUsername = input;
-      document.getElementById('forgot-question-text').textContent = 'What was the name of your first security key or pet?';
-      document.getElementById('forgot-step-1').classList.add('hidden');
-      document.getElementById('forgot-step-2').classList.remove('hidden');
-    }
+    playSFX('error');
+    showAlert(feedback, 'error', 'Security server is unavailable. Please start the Aegis security node to reset your password.');
   }
 }
 
@@ -398,21 +429,9 @@ async function handleForgotPasswordSubmit(e) {
       logLocalAuditEvent('PASSWORD_RESET_FAILED', recoveryUsername, 'Failed security challenge verification');
     }
   } catch (err) {
-    // Standalone fallback
-    const localUsers = JSON.parse(localStorage.getItem('aegis_local_users') || '{}');
-    const user = localUsers[recoveryUsername.toLowerCase()];
-    if (user && user.securityAnswer && user.securityAnswer !== answer.toLowerCase()) {
-      playSFX('error');
-      showAlert(feedback, 'error', 'Incorrect security challenge answer.');
-      logLocalAuditEvent('PASSWORD_RESET_FAILED', recoveryUsername, 'Local security challenge failed');
-    } else {
-      playSFX('success');
-      showAlert(feedback, 'success', 'Password reset successfully for local session!');
-      logLocalAuditEvent('PASSWORD_RESET_SUCCESS', recoveryUsername, 'Local password reset');
-      setTimeout(() => {
-        switchAuthTab('login');
-      }, 1500);
-    }
+    playSFX('error');
+    showAlert(feedback, 'error', 'Password reset server is unavailable. Please start the Aegis security node and try again.');
+    logLocalAuditEvent('PASSWORD_RESET_FAILED', recoveryUsername, 'Server unavailable for password reset');
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<span>🔄 Reset Master Password & Unlock</span>';
@@ -437,9 +456,14 @@ async function verifySession() {
         return;
       }
     }
+    sessionStorage.removeItem('aegis_auth_token');
+    sessionStorage.removeItem('aegis_user_profile');
     localStorage.removeItem('aegis_auth_token');
+    localStorage.removeItem('aegis_user_profile');
     authToken = null;
   } catch (err) {
+    sessionStorage.removeItem('aegis_auth_token');
+    sessionStorage.removeItem('aegis_user_profile');
     localStorage.removeItem('aegis_auth_token');
     localStorage.removeItem('aegis_user_profile');
     authToken = null;
@@ -507,6 +531,8 @@ async function handleLogout() {
     logLocalAuditEvent('LOGOUT', currentUser.username, 'User logged out');
   }
 
+  sessionStorage.removeItem('aegis_auth_token');
+  sessionStorage.removeItem('aegis_user_profile');
   localStorage.removeItem('aegis_auth_token');
   localStorage.removeItem('aegis_user_profile');
   authToken = null;
@@ -595,22 +621,18 @@ function handleVaultFile(files) {
   selectedFile = files[0];
   playSFX('click');
 
-  const reader = new FileReader();
-  reader.onload = () => {
-    selectedFileBuffer = reader.result;
+  // Store only the File reference — do NOT load entire file into memory.
+  // File chunks are read on-demand during encryption/decryption via File.slice()
+  document.getElementById('selected-file-name').textContent = selectedFile.name;
+  document.getElementById('selected-file-meta').textContent = `${formatBytes(selectedFile.size)} • Ready`;
+  document.getElementById('vault-dropzone').classList.add('hidden');
+  document.getElementById('vault-file-selected-box').classList.remove('hidden');
 
-    document.getElementById('selected-file-name').textContent = selectedFile.name;
-    document.getElementById('selected-file-meta').textContent = `${formatBytes(selectedFile.size)} • Ready`;
-    document.getElementById('vault-dropzone').classList.add('hidden');
-    document.getElementById('vault-file-selected-box').classList.remove('hidden');
+  if (selectedFile.name.endsWith('.vault') || selectedFile.name.endsWith('.enc')) {
+    if (vaultStudioMode !== 'decrypt') setVaultStudioMode('decrypt');
+  }
 
-    if (selectedFile.name.endsWith('.vault') || selectedFile.name.endsWith('.enc')) {
-      if (vaultStudioMode !== 'decrypt') setVaultStudioMode('decrypt');
-    }
-
-    updateVaultButtonState();
-  };
-  reader.readAsArrayBuffer(selectedFile);
+  updateVaultButtonState();
 }
 
 function clearVaultFile() {
@@ -674,7 +696,7 @@ function copyPassphraseInput() {
 // ============================================================================
 
 async function executeVaultCrypto() {
-  if (isProcessingCrypto || !selectedFile || !selectedFileBuffer) return;
+  if (isProcessingCrypto || !selectedFile) return;
 
   const password = document.getElementById('vault-passphrase-input').value;
   if (!password) return;
@@ -696,6 +718,8 @@ async function executeVaultCrypto() {
   const startTime = performance.now();
 
   try {
+    let pySession = null;
+
     if (vaultStudioMode === 'encrypt') {
       progressStatus.textContent = 'Deriving PBKDF2 Key (600,000 iterations)...';
       progressPct.textContent = '10%';
@@ -712,12 +736,22 @@ async function executeVaultCrypto() {
       progressPct.textContent = '35%';
       progressFill.style.width = '35%';
 
-      const plaintextBytes = new Uint8Array(selectedFileBuffer);
-      const totalBytes = plaintextBytes.length;
+      const totalBytes = selectedFile.size;
       const chunks = [];
+      lastResultFilename = `${selectedFile.name}.vault`;
+      lastSavedDesktopPath = '';
+
+      // Initialize native Desktop write stream if in pywebview window
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.start_save_session) {
+        try {
+          pySession = await window.pywebview.api.start_save_session(lastResultFilename);
+        } catch (sessErr) {
+          console.warn('Could not start pywebview save session:', sessErr);
+        }
+      }
 
       // Write SECV Binary Header (37 Bytes)
-      // Format: [MAGIC: 4B "SECV"] [VERSION: 1B 0x01] [CHUNK_SIZE: 4B (64KB)] [SALT: 16B] [BASE_NONCE: 12B]
+      // Format: [MAGIC: 4B "SECV"] [VERSION: 1B 0x01] [CHUNK_SIZE: 4B] [SALT: 16B] [BASE_NONCE: 12B]
       const header = new Uint8Array(37);
       header.set(CRYPTO_CONFIG.MAGIC, 0);
       header[4] = CRYPTO_CONFIG.VERSION;
@@ -727,14 +761,20 @@ async function executeVaultCrypto() {
       header.set(baseNonce, 25);
       chunks.push(header);
 
+      if (pySession) {
+        await window.pywebview.api.append_chunk(pySession.session_id, await bytesToBase64Async(header));
+      }
+
       let offset = 0;
       let chunkIndex = 0;
       const totalChunks = Math.ceil(totalBytes / CRYPTO_CONFIG.CHUNK_SIZE) || 1;
+      let lastReportedPct = 35;
 
       while (offset < totalBytes || totalBytes === 0) {
         const isLast = (offset + CRYPTO_CONFIG.CHUNK_SIZE >= totalBytes) ? 1 : 0;
         const chunkLen = Math.min(CRYPTO_CONFIG.CHUNK_SIZE, totalBytes - offset);
-        const chunkPlaintext = totalBytes === 0 ? new Uint8Array(0) : plaintextBytes.slice(offset, offset + chunkLen);
+        // Stream: read only this chunk from file instead of entire file in memory
+        const chunkPlaintext = totalBytes === 0 ? new Uint8Array(0) : new Uint8Array(await selectedFile.slice(offset, offset + chunkLen).arrayBuffer());
 
         // Deterministic Chunk Nonce
         const chunkNonce = computeChunkNonce(baseNonce, chunkIndex);
@@ -744,7 +784,6 @@ async function executeVaultCrypto() {
         aad.set(CRYPTO_CONFIG.MAGIC, 0);
         aad[4] = CRYPTO_CONFIG.VERSION;
         const dv = new DataView(aad.buffer, 5, 12);
-        // Write 64-bit chunk index
         dv.setUint32(0, 0, false);
         dv.setUint32(4, chunkIndex, false);
         dv.setUint32(8, isLast, false);
@@ -755,20 +794,38 @@ async function executeVaultCrypto() {
           chunkPlaintext
         );
 
-        chunks.push(new Uint8Array(ciphertextBuffer));
+        const cipherBytes = new Uint8Array(ciphertextBuffer);
+
+        // Stream chunk directly to Python desktop saver
+        if (pySession) {
+          await window.pywebview.api.append_chunk(pySession.session_id, await bytesToBase64Async(cipherBytes));
+        }
+        if (!pySession || totalBytes <= 50 * 1024 * 1024) {
+          chunks.push(cipherBytes);
+        }
+
         offset += chunkLen;
         chunkIndex++;
 
-        const pct = Math.min(95, Math.floor(35 + (chunkIndex / totalChunks) * 60));
-        progressPct.textContent = `${pct}%`;
-        progressFill.style.width = `${pct}%`;
+        // Throttle DOM updates to avoid layout/style thrashing
+        const pct = Math.min(95, Math.floor(35 + (offset / totalBytes) * 60));
+        if (pct !== lastReportedPct) {
+          lastReportedPct = pct;
+          progressPct.textContent = `${pct}%`;
+          progressFill.style.width = `${pct}%`;
+        }
 
         if (isLast || totalBytes === 0) break;
       }
 
-      const finalBlob = new Blob(chunks, { type: 'application/octet-stream' });
+      if (pySession) {
+        lastSavedDesktopPath = await window.pywebview.api.finish_save_session(pySession.session_id);
+      }
+
+      const finalBlob = (!pySession || totalBytes <= 50 * 1024 * 1024)
+        ? new Blob(chunks, { type: 'application/octet-stream' })
+        : new Blob([], { type: 'application/octet-stream' });
       lastResultBlob = finalBlob;
-      lastResultFilename = `${selectedFile.name}.vault`;
 
       progressFill.style.width = '100%';
       progressPct.textContent = '100%';
@@ -790,26 +847,47 @@ async function executeVaultCrypto() {
       progressPct.textContent = '15%';
       progressFill.style.width = '15%';
 
-      const fileBytes = new Uint8Array(selectedFileBuffer);
-      if (fileBytes.length < 37) {
+      const totalLen = selectedFile.size;
+      if (totalLen < 37) {
         throw new Error('File is too short to be a valid SECV .vault archive.');
       }
 
+      // Stream: read only the 37-byte header from file (not the entire file)
+      const headerBytes = new Uint8Array(await selectedFile.slice(0, 37).arrayBuffer());
+
       // Check Magic
-      const magic = fileBytes.slice(0, 4);
+      const magic = headerBytes.slice(0, 4);
       if (magic[0] !== 0x53 || magic[1] !== 0x45 || magic[2] !== 0x43 || magic[3] !== 0x56) {
         throw new Error('Invalid magic identifier. Not a SECV vault file.');
       }
 
-      const version = fileBytes[4];
+      const version = headerBytes[4];
       if (version !== 1) {
         throw new Error(`Unsupported SECV version: ${version}`);
       }
 
-      const salt = fileBytes.slice(9, 25);
-      const baseNonce = fileBytes.slice(25, 37);
+      // Dynamically extract chunk size from header (bytes 5-8) for 100% interoperability with all file versions
+      const chunkDv = new DataView(headerBytes.buffer, 5, 4);
+      const chunkSize = chunkDv.getUint32(0, false) || CRYPTO_CONFIG.CHUNK_SIZE;
+
+      const salt = headerBytes.slice(9, 25);
+      const baseNonce = headerBytes.slice(25, 37);
 
       const key = await deriveKeyFromPassword(password, salt, CRYPTO_CONFIG.ITERATIONS);
+
+      let outName = selectedFile.name.replace(/\.(vault|enc)$/i, '');
+      if (outName === selectedFile.name) outName = `decrypted_${outName}`;
+      lastResultFilename = outName;
+      lastSavedDesktopPath = '';
+
+      // Initialize native Desktop write stream if in pywebview window
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.start_save_session) {
+        try {
+          pySession = await window.pywebview.api.start_save_session(lastResultFilename);
+        } catch (sessErr) {
+          console.warn('Could not start pywebview save session:', sessErr);
+        }
+      }
 
       progressStatus.textContent = 'Verifying Authentication Tags & Decrypting...';
       progressPct.textContent = '40%';
@@ -818,14 +896,15 @@ async function executeVaultCrypto() {
       let offset = 37;
       let chunkIndex = 0;
       const decryptedChunks = [];
-      const totalLen = fileBytes.length;
+      let lastReportedPct = 40;
 
       while (offset < totalLen) {
         const remaining = totalLen - offset;
-        const isLast = (remaining <= CRYPTO_CONFIG.CHUNK_SIZE + CRYPTO_CONFIG.TAG_SIZE) ? 1 : 0;
-        const ciphertextLen = isLast ? remaining : CRYPTO_CONFIG.CHUNK_SIZE + CRYPTO_CONFIG.TAG_SIZE;
+        const isLast = (remaining <= chunkSize + CRYPTO_CONFIG.TAG_SIZE) ? 1 : 0;
+        const ciphertextLen = isLast ? remaining : chunkSize + CRYPTO_CONFIG.TAG_SIZE;
 
-        const ciphertext = fileBytes.slice(offset, offset + ciphertextLen);
+        // Stream: read only this encrypted chunk from file
+        const ciphertext = new Uint8Array(await selectedFile.slice(offset, offset + ciphertextLen).arrayBuffer());
         const chunkNonce = computeChunkNonce(baseNonce, chunkIndex);
 
         const aad = new Uint8Array(17);
@@ -836,34 +915,54 @@ async function executeVaultCrypto() {
         dv.setUint32(4, chunkIndex, false);
         dv.setUint32(8, isLast, false);
 
+        let plaintextBuffer;
         try {
-          const plaintextBuffer = await crypto.subtle.decrypt(
+          plaintextBuffer = await crypto.subtle.decrypt(
             { name: 'AES-GCM', iv: chunkNonce, additionalData: aad, tagLength: 128 },
             key,
             ciphertext
           );
-          decryptedChunks.push(new Uint8Array(plaintextBuffer));
         } catch (e) {
+          if (pySession && window.pywebview && window.pywebview.api) {
+            try { await window.pywebview.api.cancel_save_session(pySession.session_id); } catch (ce) {}
+            pySession = null;
+          }
           throw new Error('Authentication Failed: Incorrect passphrase or tampered file.');
+        }
+
+        const plainBytes = new Uint8Array(plaintextBuffer);
+
+        // Stream decrypted chunk directly to Python desktop saver
+        if (pySession) {
+          await window.pywebview.api.append_chunk(pySession.session_id, await bytesToBase64Async(plainBytes));
+        }
+        if (!pySession || totalLen <= 50 * 1024 * 1024) {
+          decryptedChunks.push(plainBytes);
         }
 
         offset += ciphertextLen;
         chunkIndex++;
 
+        // Throttle DOM updates
         const pct = Math.min(95, Math.floor(40 + (offset / totalLen) * 55));
-        progressPct.textContent = `${pct}%`;
-        progressFill.style.width = `${pct}%`;
+        if (pct !== lastReportedPct) {
+          lastReportedPct = pct;
+          progressPct.textContent = `${pct}%`;
+          progressFill.style.width = `${pct}%`;
+        }
 
         if (isLast) break;
       }
 
-      const finalBlob = new Blob(decryptedChunks);
+      if (pySession) {
+        lastSavedDesktopPath = await window.pywebview.api.finish_save_session(pySession.session_id);
+      }
+
+      const finalBlob = (!pySession || totalLen <= 50 * 1024 * 1024)
+        ? new Blob(decryptedChunks)
+        : new Blob([]);
       lastResultBlob = finalBlob;
       currentDecryptedPlaintext = decryptedChunks;
-
-      let outName = selectedFile.name.replace(/\.(vault|enc)$/i, '');
-      if (outName === selectedFile.name) outName = `decrypted_${outName}`;
-      lastResultFilename = outName;
 
       progressFill.style.width = '100%';
       progressPct.textContent = '100%';
@@ -879,6 +978,9 @@ async function executeVaultCrypto() {
       logLocalAuditEvent('DECRYPT_SUCCESS', currentUser ? currentUser.username : 'User', `Decrypted '${selectedFile.name}'`);
     }
   } catch (err) {
+    if (pySession && window.pywebview && window.pywebview.api) {
+      try { await window.pywebview.api.cancel_save_session(pySession.session_id); } catch (ce) {}
+    }
     playSFX('error');
     progressBox.classList.add('hidden');
     alert(`Crypto Operation Failed:\n\n${err.message}`);
@@ -891,13 +993,24 @@ async function executeVaultCrypto() {
 function showCryptoSuccess(title, desc, filename, allowPreview) {
   const resultBox = document.getElementById('vault-result-box');
   document.getElementById('result-title').textContent = title;
-  document.getElementById('result-desc').textContent = `${desc} The file was downloaded to your browser's Downloads folder.`;
+
+  if (lastSavedDesktopPath) {
+    document.getElementById('result-desc').textContent = `${desc}\nSaved directly to: ${lastSavedDesktopPath}`;
+  } else {
+    document.getElementById('result-desc').textContent = `${desc} Click Download to save to your local folder.`;
+  }
   document.getElementById('download-filename').textContent = filename;
 
   const downloadBtn = document.getElementById('btn-download-result');
   const url = URL.createObjectURL(lastResultBlob);
   downloadBtn.href = url;
   downloadBtn.download = filename;
+  downloadBtn.onclick = (e) => {
+    if (window.pywebview && window.pywebview.api) {
+      e.preventDefault();
+      saveResultToDesktop();
+    }
+  };
 
   const previewBtn = document.getElementById('btn-preview-plaintext');
   if (allowPreview) {
@@ -908,49 +1021,69 @@ function showCryptoSuccess(title, desc, filename, allowPreview) {
 
   resultBox.classList.remove('hidden');
 
-  setTimeout(() => {
-    if (window.pywebview && window.pywebview.api) {
-      saveResultToDesktop();
-    } else {
-      downloadBtn.click();
-    }
-  }, 0);
+  if (lastSavedDesktopPath) {
+    playSFX('success');
+    alert(`🎉 File Successfully Processed & Saved!\n\nLocation:\n${lastSavedDesktopPath}`);
+  } else {
+    setTimeout(() => {
+      if (!window.pywebview) {
+        downloadBtn.click();
+      }
+    }, 0);
+  }
 }
 
 async function saveResultToDesktop() {
+  if (lastSavedDesktopPath) {
+    alert(`File is already safely stored on your Desktop at:\n${lastSavedDesktopPath}`);
+    return;
+  }
   if (!lastResultBlob || !lastResultFilename) return;
 
   try {
     if (window.pywebview && window.pywebview.api) {
-      const bytes = new Uint8Array(await lastResultBlob.arrayBuffer());
-      let binary = '';
-      const chunkSize = 0x8000;
-      for (let index = 0; index < bytes.length; index += chunkSize) {
-        binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+      const session = await window.pywebview.api.start_save_session(lastResultFilename);
+      const totalSize = lastResultBlob.size;
+      const sliceSize = 1024 * 1024; // 1 MB slices
+      let offset = 0;
+      while (offset < totalSize) {
+        const slice = lastResultBlob.slice(offset, Math.min(offset + sliceSize, totalSize));
+        const buf = await slice.arrayBuffer();
+        const b64 = bytesToBase64(new Uint8Array(buf));
+        await window.pywebview.api.append_chunk(session.session_id, b64);
+        offset += slice.size;
       }
-      const savedPath = await window.pywebview.api.save_file_to_desktop(lastResultFilename, btoa(binary));
+      lastSavedDesktopPath = await window.pywebview.api.finish_save_session(session.session_id);
       playSFX('success');
-      alert(`File saved on your Desktop:\n${savedPath}`);
+      alert(`File saved on your Desktop:\n${lastSavedDesktopPath}`);
       return;
     }
 
-    if (!window.showSaveFilePicker) {
-      alert('Your app window does not support direct Desktop saving. Use Download and choose Desktop in your browser save dialog.');
+    if (window.showSaveFilePicker) {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: lastResultFilename,
+        types: [{
+          description: 'Aegis Vault File',
+          accept: { 'application/octet-stream': [lastResultFilename.endsWith('.vault') ? '.vault' : '.*'] }
+        }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(lastResultBlob);
+      await writable.close();
+      playSFX('success');
+      alert(`File saved successfully as ${lastResultFilename}.`);
       return;
     }
 
-    const handle = await window.showSaveFilePicker({
-      suggestedName: lastResultFilename,
-      types: [{
-        description: 'Aegis Vault File',
-        accept: { 'application/octet-stream': [lastResultFilename.endsWith('.vault') ? '.vault' : '.*'] }
-      }]
-    });
-    const writable = await handle.createWritable();
-    await writable.write(lastResultBlob);
-    await writable.close();
+    const url = URL.createObjectURL(lastResultBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = lastResultFilename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
     playSFX('success');
-    alert(`File saved successfully as ${lastResultFilename}.`);
   } catch (err) {
     if (err.name !== 'AbortError') {
       alert(`Unable to save the file: ${err.message}`);
@@ -985,20 +1118,80 @@ async function deriveKeyFromPassword(password, salt, iterations) {
 
 // Chunk Nonce computation (96-bit nonce + 64-bit index)
 function computeChunkNonce(baseNonce, chunkIndex) {
-  const nonce = new Uint8Array(baseNonce);
-  // Add index to last 8 bytes in big-endian
-  const dv = new DataView(nonce.buffer, nonce.byteOffset + 4, 8);
-  const currentLow = dv.getUint32(4, false);
-  const sum = (currentLow + chunkIndex) >>> 0;
-  dv.setUint32(4, sum, false);
+  const nonce = new Uint8Array(12);
+  nonce.set(baseNonce);
+  // XOR chunk index into the lower 8 bytes (big-endian), matching Python crypto_engine
+  const dv = new DataView(nonce.buffer, 4, 8);
+  const baseLow = dv.getUint32(4, false);
+  dv.setUint32(4, (baseLow ^ chunkIndex) >>> 0, false);
   return nonce;
 }
 
 // ============================================================================
-// TAB 2: ENCRYPTED SAFE (LOCAL LOCKER)
+// TAB 2: ENCRYPTED SAFE (LOCAL LOCKER WITH INDEXEDDB FILE STORAGE)
 // ============================================================================
 
-function saveCurrentResultToSafe() {
+const SAFE_DB_NAME = 'AegisSafeDB';
+const SAFE_STORE_NAME = 'safe_blobs';
+
+function getSafeDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(SAFE_DB_NAME, 1);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(SAFE_STORE_NAME)) {
+        db.createObjectStore(SAFE_STORE_NAME, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function storeSafeFile(id, blob) {
+  try {
+    const db = await getSafeDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(SAFE_STORE_NAME, 'readwrite');
+      tx.objectStore(SAFE_STORE_NAME).put({ id, blob });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {
+    console.warn('IndexedDB safe file storage error:', e);
+  }
+}
+
+async function getSafeFile(id) {
+  try {
+    const db = await getSafeDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(SAFE_STORE_NAME, 'readonly');
+      const req = tx.objectStore(SAFE_STORE_NAME).get(id);
+      req.onsuccess = () => resolve(req.result ? req.result.blob : null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch (e) {
+    console.warn('IndexedDB safe file retrieval error:', e);
+    return null;
+  }
+}
+
+async function removeSafeFile(id) {
+  try {
+    const db = await getSafeDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(SAFE_STORE_NAME, 'readwrite');
+      tx.objectStore(SAFE_STORE_NAME).delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {
+    console.warn('IndexedDB safe file removal error:', e);
+  }
+}
+
+async function saveCurrentResultToSafe() {
   if (!lastResultBlob || !lastResultFilename) return;
 
   const item = {
@@ -1009,11 +1202,12 @@ function saveCurrentResultToSafe() {
     tag: lastResultFilename.endsWith('.vault') ? 'Encrypted' : 'Plaintext'
   };
 
+  await storeSafeFile(item.id, lastResultBlob);
   localSafeItems.unshift(item);
   localStorage.setItem('aegis_safe_items', JSON.stringify(localSafeItems));
   updateSafeCountBadge();
   playSFX('success');
-  alert(`'${lastResultFilename}' has been saved to your Encrypted Safe!`);
+  alert(`'${lastResultFilename}' has been safely stored in your Encrypted Safe!`);
 }
 
 function updateSafeCountBadge() {
@@ -1049,7 +1243,7 @@ function renderSafeItems(filterText = '') {
         </div>
       </div>
       <div class="safe-card-actions">
-        <button type="button" class="btn btn-secondary btn-sm" onclick="downloadSafeItem('${item.name}')">⬇️ Download</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="downloadSafeItem('${item.id}', '${escapeHtml(item.name)}')">⬇️ Download</button>
         <button type="button" class="btn btn-danger btn-sm" onclick="deleteSafeItem('${item.id}')">🗑️ Delete</button>
       </div>
     </div>
@@ -1061,21 +1255,30 @@ function filterSafeItems() {
   renderSafeItems(val);
 }
 
-function downloadSafeItem(name) {
+async function downloadSafeItem(id, name) {
+  let blob = null;
   if (lastResultBlob && lastResultFilename === name) {
-    const url = URL.createObjectURL(lastResultBlob);
+    blob = lastResultBlob;
+  } else {
+    blob = await getSafeFile(id);
+  }
+
+  if (blob) {
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = name;
     a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
     playSFX('success');
   } else {
     alert(`File reference '${name}' is stored locally. Re-select the file in Vault Studio to decrypt.`);
   }
 }
 
-function deleteSafeItem(id) {
+async function deleteSafeItem(id) {
   playSFX('click');
+  await removeSafeFile(id);
   localSafeItems = localSafeItems.filter(i => i.id !== id);
   localStorage.setItem('aegis_safe_items', JSON.stringify(localSafeItems));
   updateSafeCountBadge();
@@ -1179,10 +1382,38 @@ function inspectVaultHeader(files) {
 let generatorMode = 'random'; // 'random' or 'diceware'
 
 const DICEWARE_WORDLIST = [
-  "shield", "cipher", "matrix", "beacon", "vector", "galaxy", "tunnel",
-  "zenith", "shadow", "falcon", "crypto", "anchor", "silver", "atomic",
-  "dragon", "forest", "signal", "planet", "plasma", "meteor", "nebula",
-  "vortex", "quantum", "oracle", "titan", "hydra", "cosmic", "aurora"
+  "shield", "cipher", "matrix", "beacon", "vector", "galaxy", "tunnel", "zenith",
+  "shadow", "falcon", "crypto", "anchor", "silver", "atomic", "dragon", "forest",
+  "signal", "planet", "plasma", "meteor", "nebula", "vortex", "quantum", "oracle",
+  "titan", "hydra", "cosmic", "aurora", "blaze", "storm", "ember", "frost",
+  "stone", "river", "ocean", "lunar", "solar", "steel", "flame", "prism",
+  "nexus", "pulse", "drift", "surge", "spark", "glyph", "raven", "hawk",
+  "eagle", "cobra", "alpha", "bravo", "delta", "gamma", "omega", "sigma",
+  "theta", "zephyr", "anvil", "crown", "guard", "haven", "ivory", "jade",
+  "karma", "latch", "maple", "noble", "onyx", "pearl", "quartz", "ruby",
+  "saber", "topaz", "ultra", "vigor", "waltz", "xenon", "yacht", "zinc",
+  "arrow", "blade", "cliff", "dawn", "echo", "flock", "grove", "haze",
+  "jewel", "knot", "lemon", "mango", "north", "oasis", "palm", "quest",
+  "ridge", "swift", "torch", "unity", "valve", "wheat", "apex", "bolt",
+  "crest", "dusk", "fern", "globe", "halo", "index", "jolt", "kite",
+  "lance", "marsh", "nerve", "optic", "plume", "quill", "relay", "scope",
+  "thorn", "urban", "vault", "wired", "axiom", "youth", "zone", "bridge",
+  "castle", "dagger", "engine", "flare", "gadget", "harbor", "impact", "jungle",
+  "kindle", "legend", "mirror", "needle", "origin", "patrol", "ripple", "scarlet",
+  "temple", "vivid", "whisper", "yonder", "zodiac", "binary", "chrome", "decode",
+  "enigma", "fabric", "genome", "hybrid", "ignite", "jigsaw", "neural", "offset",
+  "photon", "radial", "static", "turbo", "uplink", "vertex", "warden", "cobalt",
+  "dynamo", "eclipse", "fusion", "granite", "helium", "indigo", "jasper", "krypton",
+  "lambda", "magnet", "nether", "piston", "quasar", "rocket", "sphinx", "tundra",
+  "umbra", "venom", "wraith", "argon", "basalt", "carbon", "flint", "gilded",
+  "hollow", "kelvin", "lynx", "molten", "neon", "oxide", "pyrite", "rogue",
+  "slate", "umber", "vapor", "acorn", "birch", "cedar", "fjord", "glen",
+  "heath", "inlet", "lotus", "mesa", "novel", "olive", "peak", "reef",
+  "shoal", "trail", "vine", "whale", "aspen", "brook", "coral", "gorge",
+  "kayak", "polar", "shelf", "cove", "gale", "mist", "sage", "tide",
+  "wren", "bass", "cope", "dock", "edge", "flux", "grip", "helm",
+  "iris", "jazz", "keen", "link", "mode", "port", "rank", "scan",
+  "task", "unit", "wave", "axis", "byte", "chip", "core", "grid"
 ];
 
 function setGeneratorMode(mode) {
@@ -1568,6 +1799,12 @@ async function handleChangePassword(e) {
   const newPassword = document.getElementById('new-password').value;
   const feedback = document.getElementById('modal-feedback');
 
+  if (newPassword && newPassword.length > 128) {
+    playSFX('error');
+    showAlert(feedback, 'error', 'Password must not exceed 128 characters.');
+    return;
+  }
+
   try {
     const res = await fetch(`${API_BASE}/api/auth/change-password`, {
       method: 'POST',
@@ -1588,9 +1825,8 @@ async function handleChangePassword(e) {
       showAlert(feedback, 'error', data.error || 'Failed to update password.');
     }
   } catch (err) {
-    playSFX('success');
-    showAlert(feedback, 'success', 'Password updated for local session!');
-    setTimeout(closeChangePasswordModal, 1200);
+    playSFX('error');
+    showAlert(feedback, 'error', 'Password change server is unavailable. Please start the Aegis security node and try again.');
   }
 }
 

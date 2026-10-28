@@ -1,5 +1,6 @@
 import os
 import sys
+import secrets
 import subprocess
 import crypto_engine
 
@@ -12,7 +13,8 @@ def test_cross_compatibility():
     print("TESTING PYTHON <-> JAVA CRYPTO INTEROPERABILITY")
     print("==================================================")
 
-    password = "MasterVaultSecret#2026!"
+    # Dynamic high-entropy secret (no hardcoded password in source code)
+    password = f"Vault_{secrets.token_urlsafe(24)}!9"
     original_text = "Zero-Knowledge Aegis Interoperability Test Payload across Python and Java SE.\n" * 100
 
     # 1. Write original file

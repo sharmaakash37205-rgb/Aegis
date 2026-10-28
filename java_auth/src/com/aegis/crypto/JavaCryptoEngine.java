@@ -29,7 +29,7 @@ public class JavaCryptoEngine {
     public static final int NONCE_SIZE = 12;                      // 96-bit nonce
     public static final int TAG_SIZE = 16;                        // 128-bit GCM tag
     public static final int ITERATIONS = 600_000;                 // 600,000 PBKDF2 iterations
-    public static final int DEFAULT_CHUNK_SIZE = 64 * 1024;       // 64 KB streaming chunks
+    public static final int DEFAULT_CHUNK_SIZE = 2 * 1024 * 1024; // 2 MB high-throughput streaming chunks
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
@@ -78,7 +78,7 @@ public class JavaCryptoEngine {
     }
 
     /**
-     * Encrypts a file in 64 KB chunks using AES-256-GCM.
+     * Encrypts a file in high-throughput 2 MB chunks using AES-256-GCM.
      */
     public static void encryptFile(File inputFile, File outputFile, char[] password, BiConsumer<Long, Long> progressCallback) throws Exception {
         long totalBytes = inputFile.length();
@@ -90,8 +90,9 @@ public class JavaCryptoEngine {
         SecretKey key = deriveKey(password, salt, ITERATIONS);
         File tempFile = new File(outputFile.getAbsolutePath() + ".tmp");
 
-        try (InputStream in = new BufferedInputStream(new FileInputStream(inputFile));
-             OutputStream out = new BufferedOutputStream(new FileOutputStream(tempFile))) {
+        int ioBufSize = Math.max(DEFAULT_CHUNK_SIZE, 1024 * 1024);
+        try (InputStream in = new BufferedInputStream(new FileInputStream(inputFile), ioBufSize);
+             OutputStream out = new BufferedOutputStream(new FileOutputStream(tempFile), ioBufSize)) {
 
             // Write 37-byte Header: MAGIC(4) + VERSION(1) + CHUNK_SIZE(4) + SALT(16) + BASE_NONCE(12)
             ByteBuffer header = ByteBuffer.allocate(37).order(ByteOrder.BIG_ENDIAN);
@@ -103,39 +104,55 @@ public class JavaCryptoEngine {
             out.write(header.array());
 
             byte[] buffer = new byte[DEFAULT_CHUNK_SIZE];
+            byte[] nextBuffer = new byte[DEFAULT_CHUNK_SIZE];
             long bytesProcessed = 0;
             long chunkIndex = 0;
 
-            int read = in.read(buffer);
-            while (read != -1) {
-                // Check if there is more data
-                int nextByte = in.read();
-                boolean isLast = (nextByte == -1);
+            int read = in.readNBytes(buffer, 0, buffer.length);
+            if (read > 0) {
+                while (read > 0) {
+                    int nextRead = in.readNBytes(nextBuffer, 0, nextBuffer.length);
+                    boolean isLast = (nextRead == 0);
 
-                byte[] chunkData = (read == buffer.length) ? buffer : Arrays.copyOf(buffer, read);
-                byte[] chunkNonce = getChunkNonce(baseNonce, chunkIndex);
-                byte[] aad = buildAad(chunkIndex, isLast);
+                    byte[] chunkData = (read == buffer.length) ? buffer : Arrays.copyOf(buffer, read);
+                    byte[] chunkNonce = getChunkNonce(baseNonce, chunkIndex);
+                    byte[] aad = buildAad(chunkIndex, isLast);
 
+                    Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                    GCMParameterSpec gcmSpec = new GCMParameterSpec(TAG_SIZE * 8, chunkNonce);
+                    cipher.init(Cipher.ENCRYPT_MODE, key, gcmSpec);
+                    cipher.updateAAD(aad);
+
+                    byte[] ciphertext = cipher.doFinal(chunkData);
+                    out.write(ciphertext);
+
+                    bytesProcessed += read;
+                    if (progressCallback != null) {
+                        progressCallback.accept(bytesProcessed, totalBytes);
+                    }
+
+                    if (isLast) break;
+
+                    byte[] tmp = buffer;
+                    buffer = nextBuffer;
+                    nextBuffer = tmp;
+                    read = nextRead;
+                    chunkIndex++;
+                }
+            } else {
+                // 0-byte file edge case
+                byte[] chunkNonce = getChunkNonce(baseNonce, 0);
+                byte[] aad = buildAad(0, true);
                 Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
                 GCMParameterSpec gcmSpec = new GCMParameterSpec(TAG_SIZE * 8, chunkNonce);
                 cipher.init(Cipher.ENCRYPT_MODE, key, gcmSpec);
                 cipher.updateAAD(aad);
 
-                byte[] ciphertext = cipher.doFinal(chunkData);
+                byte[] ciphertext = cipher.doFinal(new byte[0]);
                 out.write(ciphertext);
-
-                bytesProcessed += read;
                 if (progressCallback != null) {
-                    progressCallback.accept(bytesProcessed, totalBytes);
+                    progressCallback.accept(0L, totalBytes);
                 }
-
-                if (isLast) break;
-
-                // We read one byte to probe EOF; prepend it to next buffer
-                buffer[0] = (byte) nextByte;
-                int remainingRead = in.read(buffer, 1, buffer.length - 1);
-                read = (remainingRead == -1) ? 1 : 1 + remainingRead;
-                chunkIndex++;
             }
 
             out.flush();
@@ -154,8 +171,8 @@ public class JavaCryptoEngine {
         long totalBytes = inputFile.length();
         File tempFile = new File(outputFile.getAbsolutePath() + ".tmp");
 
-        try (InputStream in = new BufferedInputStream(new FileInputStream(inputFile));
-             OutputStream out = new BufferedOutputStream(new FileOutputStream(tempFile))) {
+        try (InputStream in = new BufferedInputStream(new FileInputStream(inputFile), 1024 * 1024);
+             OutputStream out = new BufferedOutputStream(new FileOutputStream(tempFile), 1024 * 1024)) {
 
             byte[] headerBytes = in.readNBytes(37);
             if (headerBytes.length < 37) {
@@ -184,13 +201,14 @@ public class JavaCryptoEngine {
             SecretKey key = deriveKey(password, salt, ITERATIONS);
             int cipherChunkSize = chunkSize + TAG_SIZE;
             byte[] cipherBuffer = new byte[cipherChunkSize];
+            byte[] nextCipherBuffer = new byte[cipherChunkSize];
             long bytesProcessed = 37;
             long chunkIndex = 0;
 
-            int read = in.read(cipherBuffer);
-            while (read != -1) {
-                int nextByte = in.read();
-                boolean isLast = (nextByte == -1);
+            int read = in.readNBytes(cipherBuffer, 0, cipherChunkSize);
+            while (read > 0) {
+                int nextRead = in.readNBytes(nextCipherBuffer, 0, cipherChunkSize);
+                boolean isLast = (nextRead == 0);
 
                 byte[] encryptedChunk = (read == cipherBuffer.length) ? cipherBuffer : Arrays.copyOf(cipherBuffer, read);
                 byte[] chunkNonce = getChunkNonce(baseNonce, chunkIndex);
@@ -211,9 +229,10 @@ public class JavaCryptoEngine {
 
                 if (isLast) break;
 
-                cipherBuffer[0] = (byte) nextByte;
-                int remainingRead = in.read(cipherBuffer, 1, cipherBuffer.length - 1);
-                read = (remainingRead == -1) ? 1 : 1 + remainingRead;
+                byte[] tmp = cipherBuffer;
+                cipherBuffer = nextCipherBuffer;
+                nextCipherBuffer = tmp;
+                read = nextRead;
                 chunkIndex++;
             }
 

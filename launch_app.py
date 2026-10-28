@@ -33,7 +33,9 @@ class CustomWebHandler(SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        if origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1"):
+            self.send_header("Access-Control-Allow-Origin", origin)
         super().end_headers()
 
     def log_message(self, format, *args):
@@ -41,11 +43,14 @@ class CustomWebHandler(SimpleHTTPRequestHandler):
         pass
 
 def start_python_fallback_server(port: int):
-    server = HTTPServer(('0.0.0.0', port), CustomWebHandler)
+    server = HTTPServer(('127.0.0.1', port), CustomWebHandler)
     server.serve_forever()
 
 class DesktopFileApi:
-    def save_file_to_desktop(self, filename: str, file_data: str) -> str:
+    def __init__(self):
+        self._sessions = {}
+
+    def _get_output_path(self, filename: str) -> str:
         one_drive_desktop = os.path.join(os.environ.get("OneDrive", ""), "Desktop")
         local_desktop = os.path.join(os.path.expanduser("~"), "Desktop")
         desktop_dir = one_drive_desktop if os.path.isdir(one_drive_desktop) else local_desktop
@@ -60,6 +65,57 @@ class DesktopFileApi:
             while os.path.exists(output_path):
                 output_path = os.path.join(output_dir, f"{stem}_{counter}{extension}")
                 counter += 1
+        return output_path
+
+    def start_save_session(self, filename: str) -> dict:
+        """Starts a streaming chunked write session for files of arbitrary size."""
+        import uuid
+        session_id = str(uuid.uuid4())
+        final_path = self._get_output_path(filename)
+        temp_path = final_path + ".stream_tmp"
+        f = open(temp_path, "wb")
+        self._sessions[session_id] = {
+            "handle": f,
+            "temp_path": temp_path,
+            "final_path": final_path,
+        }
+        return {"session_id": session_id, "output_path": final_path}
+
+    def append_chunk(self, session_id: str, chunk_b64: str) -> bool:
+        """Appends a base64-encoded chunk to an active file session."""
+        session = self._sessions.get(session_id)
+        if not session:
+            return False
+        data = base64.b64decode(chunk_b64)
+        session["handle"].write(data)
+        return True
+
+    def finish_save_session(self, session_id: str) -> str:
+        """Closes the file handle and commits it atomically to destination."""
+        session = self._sessions.pop(session_id, None)
+        if not session:
+            return ""
+        session["handle"].close()
+        temp_path = session["temp_path"]
+        final_path = session["final_path"]
+        if os.path.exists(final_path):
+            os.remove(final_path)
+        os.rename(temp_path, final_path)
+        return final_path
+
+    def cancel_save_session(self, session_id: str) -> None:
+        """Cleans up temporary file if operation failed or was cancelled."""
+        session = self._sessions.pop(session_id, None)
+        if session:
+            try:
+                session["handle"].close()
+                if os.path.exists(session["temp_path"]):
+                    os.remove(session["temp_path"])
+            except Exception:
+                pass
+
+    def save_file_to_desktop(self, filename: str, file_data: str) -> str:
+        output_path = self._get_output_path(filename)
         with open(output_path, "wb") as output_file:
             output_file.write(base64.b64decode(file_data))
         return output_path

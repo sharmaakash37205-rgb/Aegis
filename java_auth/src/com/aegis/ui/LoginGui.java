@@ -556,9 +556,12 @@ public class LoginGui extends JFrame {
 
         File outFile;
         File desktopDir = new File(System.getProperty("user.home"), "Desktop");
-        File oneDriveDesktop = new File(System.getenv("OneDrive", ""), "Desktop");
-        if (oneDriveDesktop.isDirectory()) {
-            desktopDir = oneDriveDesktop;
+        String oneDriveEnv = System.getenv("OneDrive");
+        if (oneDriveEnv != null && !oneDriveEnv.isBlank()) {
+            File oneDriveDesktop = new File(oneDriveEnv, "Desktop");
+            if (oneDriveDesktop.isDirectory()) {
+                desktopDir = oneDriveDesktop;
+            }
         }
         File outputRoot = new File(desktopDir, "Secure Folder");
         if (isEncrypted) {
@@ -585,6 +588,8 @@ public class LoginGui extends JFrame {
             outFile = new File(outputDir, selectedFile.getName() + ".vault");
         }
 
+        final File targetOutFile = outFile;
+
         ProgressMonitor monitor = new ProgressMonitor(this, (isEncrypted ? "Decrypting..." : "Encrypting..."),
                 "Processing chunks", 0, 100);
         monitor.setMillisToDecideToPopup(0);
@@ -594,12 +599,12 @@ public class LoginGui extends JFrame {
             @Override
             protected Void doInBackground() throws Exception {
                 if (isEncrypted) {
-                    JavaCryptoEngine.decryptFile(selectedFile, outFile, password, (processed, total) -> {
+                    JavaCryptoEngine.decryptFile(selectedFile, targetOutFile, password, (processed, total) -> {
                         int percent = total > 0 ? (int) ((processed * 100) / total) : 0;
                         SwingUtilities.invokeLater(() -> monitor.setProgress(percent));
                     });
                 } else {
-                    JavaCryptoEngine.encryptFile(selectedFile, outFile, password, (processed, total) -> {
+                    JavaCryptoEngine.encryptFile(selectedFile, targetOutFile, password, (processed, total) -> {
                         int percent = total > 0 ? (int) ((processed * 100) / total) : 0;
                         SwingUtilities.invokeLater(() -> monitor.setProgress(percent));
                     });
@@ -614,7 +619,7 @@ public class LoginGui extends JFrame {
                     get();
                     JOptionPane.showMessageDialog(LoginGui.this,
                             (isEncrypted ? "Decryption" : "Encryption") + " complete!\nOutput: "
-                                    + outFile.getAbsolutePath(),
+                                    + targetOutFile.getAbsolutePath(),
                             "Success", JOptionPane.INFORMATION_MESSAGE);
                 } catch (Exception ex) {
                     JOptionPane.showMessageDialog(LoginGui.this,

@@ -243,6 +243,8 @@ public class UserManager {
     }
 
     private final Map<String, User> users = new ConcurrentHashMap<>();
+    private final Map<String, Integer> recoveryFailures = new ConcurrentHashMap<>();
+    private final Map<String, Instant> recoveryLockouts = new ConcurrentHashMap<>();
     private final File dataFile;
     private final AuditLogger auditLogger;
 
@@ -425,24 +427,24 @@ public class UserManager {
 
         String userKey = user.getUsername();
 
-        // If user has no security answer set
+        // Check Password Recovery Lockout (protects security answer against brute-force enumeration)
+        Instant recLock = recoveryLockouts.get(userKey);
+        if (recLock != null && Instant.now().isBefore(recLock)) {
+            long remaining = java.time.Duration.between(Instant.now(), recLock).toSeconds();
+            auditLogger.log(AuditLogger.EventType.UNAUTHORIZED_ACCESS, userKey, ipAddress,
+                    "Attempt to recover password while recovery locked (" + remaining + "s left)");
+            return new AuthResult(false,
+                    "Too many failed security answer attempts. Password recovery is temporarily locked for " + remaining + " seconds.",
+                    user, true, remaining);
+        }
+
+        // If user has no security answer set, deny password reset (prevent account takeover)
         if (user.getSecurityAnswerHash() == null || user.getSecurityAnswerSalt() == null) {
-            // Check if password reset is allowed with direct new password if no security
-            // answer was configured
-            String strengthErr = PasswordHasher.checkPasswordStrength(new String(newPassword));
-            if (strengthErr != null) {
-                return new AuthResult(false, strengthErr, user);
-            }
-            PasswordHasher.HashResult newHash = PasswordHasher.hashPassword(newPassword);
-            user.setPasswordHash(newHash.getHashBase64());
-            user.setSalt(newHash.getSaltBase64());
-            user.setIterations(newHash.getIterations());
-            user.setFailedAttempts(0);
-            user.setLockedUntil(null);
-            saveUsers();
-            auditLogger.log(AuditLogger.EventType.PASSWORD_RESET_SUCCESS, userKey, ipAddress,
-                    "Password recovered successfully");
-            return new AuthResult(true, "Password reset successfully!", user);
+            auditLogger.log(AuditLogger.EventType.PASSWORD_RESET_FAILED, userKey, ipAddress,
+                    "No security answer configured — password reset denied");
+            return new AuthResult(false,
+                    "Password reset is unavailable. No security answer was configured for this account. Please contact the administrator.",
+                    user);
         }
 
         if (securityAnswer == null || securityAnswer.trim().isEmpty()) {
@@ -457,9 +459,26 @@ public class UserManager {
                 user.getSecurityAnswerSalt(), PasswordHasher.ITERATIONS);
 
         if (!validAnswer) {
-            auditLogger.log(AuditLogger.EventType.PASSWORD_RESET_FAILED, userKey, ipAddress,
-                    "Incorrect security challenge answer");
-            return new AuthResult(false, "Security challenge answer is incorrect.", user);
+            int fails = recoveryFailures.getOrDefault(userKey, 0) + 1;
+            recoveryFailures.put(userKey, fails);
+
+            if (fails >= MAX_FAILED_ATTEMPTS) {
+                recoveryLockouts.put(userKey, Instant.now().plusSeconds(LOCKOUT_DURATION_SECONDS));
+                recoveryFailures.remove(userKey);
+
+                auditLogger.log(AuditLogger.EventType.ACCOUNT_LOCKED, userKey, ipAddress,
+                        "Password recovery locked for " + (LOCKOUT_DURATION_SECONDS / 60)
+                                + " minutes after " + fails + " failed security answers");
+                return new AuthResult(false,
+                        "Too many failed recovery attempts. Password recovery locked for 5 minutes.", user, true,
+                        LOCKOUT_DURATION_SECONDS);
+            } else {
+                int attemptsLeft = MAX_FAILED_ATTEMPTS - fails;
+                auditLogger.log(AuditLogger.EventType.PASSWORD_RESET_FAILED, userKey, ipAddress,
+                        "Incorrect security challenge answer (" + attemptsLeft + " attempts left)");
+                return new AuthResult(false,
+                        "Security challenge answer is incorrect. (" + attemptsLeft + " attempts remaining)", user);
+            }
         }
 
         String strengthErr = PasswordHasher.checkPasswordStrength(new String(newPassword));
@@ -467,6 +486,8 @@ public class UserManager {
             return new AuthResult(false, strengthErr, user);
         }
 
+        recoveryFailures.remove(userKey);
+        recoveryLockouts.remove(userKey);
         PasswordHasher.HashResult newHash = PasswordHasher.hashPassword(newPassword);
         user.setPasswordHash(newHash.getHashBase64());
         user.setSalt(newHash.getSaltBase64());
@@ -678,12 +699,12 @@ public class UserManager {
         int idx = json.indexOf(search);
         if (idx == -1)
             return null;
-        int valStart = json.indexOf('"', idx + search.length());
-        if (valStart == -1) {
-            int nullIdx = json.indexOf("null", idx + search.length());
-            if (nullIdx != -1 && nullIdx < idx + search.length() + 10)
-                return null;
-            return null;
+        int valStart = idx + search.length();
+        while (valStart < json.length() && Character.isWhitespace(json.charAt(valStart))) {
+            valStart++;
+        }
+        if (valStart >= json.length() || json.charAt(valStart) != '"') {
+            return null; // Not a quoted string (e.g. null, numeric, or boolean)
         }
         int valEnd = json.indexOf('"', valStart + 1);
         while (valEnd != -1 && json.charAt(valEnd - 1) == '\\') {

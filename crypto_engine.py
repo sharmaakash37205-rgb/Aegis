@@ -10,11 +10,12 @@ SALT_SIZE = 16          # 128-bit salt for PBKDF2
 NONCE_SIZE = 12         # 96-bit nonce standard for AES-GCM
 TAG_SIZE = 16           # 128-bit authentication tag
 ITERATIONS = 600000     # OWASP recommendation for PBKDF2-HMAC-SHA256
-DEFAULT_CHUNK_SIZE = 64 * 1024  # 64 KB chunks for constant O(1) memory streaming
+DEFAULT_CHUNK_SIZE = 2 * 1024 * 1024  # 2 MB chunks for high-throughput streaming (O(1) memory)
 
 # File Format Metadata
 MAGIC_HEADER = b"SECV"  # 4-byte magic identifier (Secure Vault)
 FORMAT_VERSION = 1      # Format version number
+AAD_STRUCT = struct.Struct(">4sBQI")
 
 def derive_key(password: str | bytes, salt: bytes, iterations: int = ITERATIONS) -> bytes:
     """
@@ -52,19 +53,10 @@ def encrypt_file(
     Encrypts a file of arbitrary size in chunks using AES-256-GCM authenticated encryption.
 
     Features:
-    - O(1) Constant Memory: Streams data in chunks (64 KB default), handling multi-GB files without RAM exhaustion.
+    - O(1) Constant Memory: Streams data in high-throughput chunks (2 MB default), handling multi-GB files at SSD speeds.
+    - Zero-Seek Sequential Streaming: Eliminates disk buffer invalidations by streaming forward.
     - Tamper & Reorder Proof: Binds chunk index and EOF flag into Authenticated Associated Data (AAD).
     - Atomic Output: Writes to a temporary file first and renames upon success, avoiding partial files.
-
-    Format:
-    [Header (37B)]
-      - MAGIC (4B): b'SECV'
-      - VERSION (1B): 0x01
-      - CHUNK_SIZE (4B, uint32)
-      - SALT (16B)
-      - BASE_NONCE (12B)
-    [Body]
-      - Sequence of Chunks: [Ciphertext (chunk_size) + AuthTag (16B)]
     """
     total_bytes = os.path.getsize(input_path)
     salt = os.urandom(SALT_SIZE)
@@ -75,37 +67,45 @@ def encrypt_file(
     temp_output_path = output_path + ".tmp"
     bytes_processed = 0
 
+    base_int = int.from_bytes(base_nonce[4:], byteorder="big")
+    nonce_prefix = base_nonce[:4]
+    io_buf_size = max(chunk_size, 1024 * 1024)
+
     try:
-        with open(input_path, "rb") as fin, open(temp_output_path, "wb") as fout:
+        with open(input_path, "rb", buffering=io_buf_size) as fin, open(temp_output_path, "wb", buffering=io_buf_size) as fout:
             # Write 37-byte file header
             header = struct.pack(">4sBI", MAGIC_HEADER, FORMAT_VERSION, chunk_size) + salt + base_nonce
             fout.write(header)
 
+            chunk = fin.read(chunk_size)
             chunk_index = 0
-            while True:
-                chunk = fin.read(chunk_size)
+            if chunk:
+                while chunk:
+                    next_chunk = fin.read(chunk_size)
+                    is_last = (len(next_chunk) == 0)
 
-                # Lookahead 1 byte to check if this is the final chunk
-                next_byte = fin.read(1)
-                is_last = (len(next_byte) == 0)
+                    aad = AAD_STRUCT.pack(MAGIC_HEADER, FORMAT_VERSION, chunk_index, 1 if is_last else 0)
+                    chunk_nonce = nonce_prefix + (base_int ^ chunk_index).to_bytes(8, byteorder="big")
 
-                if not is_last:
-                    fin.seek(-1, os.SEEK_CUR)
+                    ciphertext = aesgcm.encrypt(chunk_nonce, chunk, aad)
+                    fout.write(ciphertext)
 
-                # Bind metadata to AAD to prevent chunk swapping or premature truncation
-                aad = struct.pack(">4sBQI", MAGIC_HEADER, FORMAT_VERSION, chunk_index, 1 if is_last else 0)
-                chunk_nonce = _get_chunk_nonce(base_nonce, chunk_index)
+                    bytes_processed += len(chunk)
+                    if progress_callback:
+                        progress_callback(bytes_processed, total_bytes)
 
-                ciphertext = aesgcm.encrypt(chunk_nonce, chunk, aad)
+                    if is_last:
+                        break
+                    chunk = next_chunk
+                    chunk_index += 1
+            else:
+                # 0-byte file edge case
+                aad = AAD_STRUCT.pack(MAGIC_HEADER, FORMAT_VERSION, 0, 1)
+                chunk_nonce = nonce_prefix + (base_int ^ 0).to_bytes(8, byteorder="big")
+                ciphertext = aesgcm.encrypt(chunk_nonce, b"", aad)
                 fout.write(ciphertext)
-
-                bytes_processed += len(chunk)
                 if progress_callback:
-                    progress_callback(bytes_processed, total_bytes)
-
-                if is_last:
-                    break
-                chunk_index += 1
+                    progress_callback(0, total_bytes)
 
         # Atomic replacement of destination file
         if os.path.exists(output_path):
@@ -136,7 +136,7 @@ def decrypt_file(
         with open(input_path, "rb") as fin:
             header_prefix = fin.read(4)
 
-            # Check if file has the new chunked stream header
+            # Check if file has the chunked stream header
             if header_prefix == MAGIC_HEADER:
                 version, chunk_size = struct.unpack(">BI", fin.read(5))
                 if version != FORMAT_VERSION:
@@ -150,34 +150,36 @@ def decrypt_file(
                 key = derive_key(password, salt)
                 aesgcm = AESGCM(key)
 
+                base_int = int.from_bytes(base_nonce[4:], byteorder="big")
+                nonce_prefix = base_nonce[:4]
+
                 encrypted_chunk_size = chunk_size + TAG_SIZE
                 chunk_index = 0
                 bytes_processed = 37
+                io_buf_size = max(chunk_size, 1024 * 1024)
 
-                with open(temp_output_path, "wb") as fout:
-                    while True:
-                        encrypted_chunk = fin.read(encrypted_chunk_size)
-                        if not encrypted_chunk:
-                            raise ValueError("Unexpected end of file or truncated ciphertext.")
+                with open(temp_output_path, "wb", buffering=io_buf_size) as fout:
+                    enc_chunk = fin.read(encrypted_chunk_size)
+                    if not enc_chunk:
+                        raise ValueError("Unexpected end of file or truncated ciphertext.")
 
-                        # Lookahead to detect EOF
-                        next_byte = fin.read(1)
-                        is_last = (len(next_byte) == 0)
-                        if not is_last:
-                            fin.seek(-1, os.SEEK_CUR)
+                    while enc_chunk:
+                        next_enc_chunk = fin.read(encrypted_chunk_size)
+                        is_last = (len(next_enc_chunk) == 0)
 
-                        aad = struct.pack(">4sBQI", MAGIC_HEADER, FORMAT_VERSION, chunk_index, 1 if is_last else 0)
-                        chunk_nonce = _get_chunk_nonce(base_nonce, chunk_index)
+                        aad = AAD_STRUCT.pack(MAGIC_HEADER, FORMAT_VERSION, chunk_index, 1 if is_last else 0)
+                        chunk_nonce = nonce_prefix + (base_int ^ chunk_index).to_bytes(8, byteorder="big")
 
-                        decrypted_chunk = aesgcm.decrypt(chunk_nonce, encrypted_chunk, aad)
+                        decrypted_chunk = aesgcm.decrypt(chunk_nonce, enc_chunk, aad)
                         fout.write(decrypted_chunk)
 
-                        bytes_processed += len(encrypted_chunk)
+                        bytes_processed += len(enc_chunk)
                         if progress_callback:
                             progress_callback(bytes_processed, total_bytes)
 
                         if is_last:
                             break
+                        enc_chunk = next_enc_chunk
                         chunk_index += 1
 
             else:

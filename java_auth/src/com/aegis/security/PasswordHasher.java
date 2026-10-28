@@ -18,6 +18,7 @@ public class PasswordHasher {
     public static final int ITERATIONS = 600_000; // OWASP recommendation
     public static final int KEY_LENGTH = 256;      // 256-bit key
     public static final int SALT_SIZE = 16;        // 128-bit salt
+    public static final int MAX_PASSWORD_LENGTH = 128; // OWASP recommendation to mitigate PBKDF2 DoS
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
@@ -80,6 +81,9 @@ public class PasswordHasher {
      * Verifies a candidate password against an expected base64 hash using constant-time comparison.
      */
     public static boolean verifyPassword(char[] candidatePassword, String expectedHashBase64, String saltBase64, int iterations) {
+        if (candidatePassword == null || candidatePassword.length == 0 || candidatePassword.length > MAX_PASSWORD_LENGTH) {
+            return false;
+        }
         try {
             byte[] salt = Base64.getDecoder().decode(saltBase64);
             byte[] expectedHash = Base64.getDecoder().decode(expectedHashBase64);
@@ -93,6 +97,9 @@ public class PasswordHasher {
     }
 
     private static byte[] computeHash(char[] password, byte[] salt, int iterations) {
+        if (password != null && password.length > MAX_PASSWORD_LENGTH) {
+            throw new IllegalArgumentException("Password exceeds maximum allowed length of " + MAX_PASSWORD_LENGTH + " characters.");
+        }
         try {
             PBEKeySpec spec = new PBEKeySpec(password, salt, iterations, KEY_LENGTH);
             SecretKeyFactory skf = SecretKeyFactory.getInstance(ALGORITHM);
@@ -108,6 +115,9 @@ public class PasswordHasher {
     public static String checkPasswordStrength(String password) {
         if (password == null || password.length() < 8) {
             return "Password must be at least 8 characters long.";
+        }
+        if (password.length() > MAX_PASSWORD_LENGTH) {
+            return "Password must not exceed " + MAX_PASSWORD_LENGTH + " characters.";
         }
         boolean hasUpper = false;
         boolean hasLower = false;

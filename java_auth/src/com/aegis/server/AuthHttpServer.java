@@ -39,7 +39,7 @@ public class AuthHttpServer {
     }
 
     public synchronized void start() throws IOException {
-        server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
 
         // Register Handlers
         server.createContext("/api/auth/register", new RegisterHandler());
@@ -59,7 +59,7 @@ public class AuthHttpServer {
         server.start();
 
         System.out.println("🚀 Aegis Auth Server running at http://localhost:" + port + "/");
-        System.out.println("🌐 Remote / LAN Access enabled on port " + port);
+        System.out.println("🔒 Aegis Auth Server bound to localhost (127.0.0.1:" + port + ")");
     }
 
     public synchronized void stop() {
@@ -442,9 +442,13 @@ public class AuthHttpServer {
 
     private void addCorsHeaders(HttpExchange exchange) {
         Headers headers = exchange.getResponseHeaders();
-        headers.set("Access-Control-Allow-Origin", "*");
-        headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+        // Restrict CORS to localhost origins only (no wildcard)
+        String origin = exchange.getRequestHeaders().getFirst("Origin");
+        if (origin != null && (origin.startsWith("http://localhost") || origin.startsWith("http://127.0.0.1"))) {
+            headers.set("Access-Control-Allow-Origin", origin);
+        }
+        headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
     }
 
     private void sendJsonResponse(HttpExchange exchange, int statusCode, String json) throws IOException {
@@ -474,10 +478,7 @@ public class AuthHttpServer {
     }
 
     private String getClientIp(HttpExchange exchange) {
-        String forwarded = exchange.getRequestHeaders().getFirst("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
-        }
+        // Do not trust X-Forwarded-For header — use actual remote address to prevent IP spoofing
         return exchange.getRemoteAddress().getAddress().getHostAddress();
     }
 
@@ -487,14 +488,14 @@ public class AuthHttpServer {
     }
 
     private String buildUserJson(UserManager.User u) {
+        // vaultSalt intentionally excluded — cryptographic material must not be exposed to the client
         return String.format(
-            "{\"username\":\"%s\",\"displayName\":\"%s\",\"email\":\"%s\",\"createdAt\":\"%s\",\"lastLoginAt\":%s,\"vaultSalt\":\"%s\"}",
+            "{\"username\":\"%s\",\"displayName\":\"%s\",\"email\":\"%s\",\"createdAt\":\"%s\",\"lastLoginAt\":%s}",
             escapeJson(u.getUsername()),
             escapeJson(u.getDisplayName()),
             escapeJson(u.getEmail()),
             escapeJson(u.getCreatedAt()),
-            u.getLastLoginAt() != null ? "\"" + escapeJson(u.getLastLoginAt()) + "\"" : "null",
-            escapeJson(u.getVaultSalt())
+            u.getLastLoginAt() != null ? "\"" + escapeJson(u.getLastLoginAt()) + "\"" : "null"
         );
     }
 
@@ -504,8 +505,13 @@ public class AuthHttpServer {
         if (idx == -1) return null;
         int colon = json.indexOf(':', idx + search.length());
         if (colon == -1) return null;
-        int quoteStart = json.indexOf('"', colon + 1);
-        if (quoteStart == -1) return null;
+        int quoteStart = colon + 1;
+        while (quoteStart < json.length() && Character.isWhitespace(json.charAt(quoteStart))) {
+            quoteStart++;
+        }
+        if (quoteStart >= json.length() || json.charAt(quoteStart) != '"') {
+            return null; // Not a quoted string value (e.g. null, numeric, or boolean)
+        }
         int quoteEnd = json.indexOf('"', quoteStart + 1);
         while (quoteEnd != -1 && json.charAt(quoteEnd - 1) == '\\') {
             quoteEnd = json.indexOf('"', quoteEnd + 1);
